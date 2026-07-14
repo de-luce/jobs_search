@@ -1,0 +1,33 @@
+{
+  "name": "front",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node start-dev.mjs",
+    "build": "vue-tsc -b && vite build",
+    "build:prod": "vue-tsc -b && vite build && node scripts/copy-dist.mjs",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc -b --noEmit"
+  },
+  "dependencies": {
+    "@iconify-json/bi": "^1.2.7",
+    "@iconify/vue": "^5.0.0",
+    "@vueuse/core": "^13.0.0",
+    "chart.js": "^4.4.4",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.6.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.3",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "tailwindcss-animate": "^1.0.7",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.2",
+    "vue-tsc": "^2.2.8"
+  }
+}

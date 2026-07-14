@@ -1,0 +1,77 @@
+# Java / Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# IntelliJ IDEA
+*.iws
+*.iml
+*.ipr
+.idea/
+
+# Eclipse
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+# NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+
+# VS Code
+.vscode/
+
+# Frontend / Node
+node_modules/
+dist/
+front/node_modules/
+front/dist/
+.env
+.env*
+.env.local
+*.pem
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# SQLite / database
+db/
+*.db
+
+# OS / editor junk
+.DS_Store
+
+# Playwright
+.playwright/
+ms-playwright/
+playwright-*
+
+# Project-specific
+config.yaml
+.git-rewrite
+*.sh
+!/scripts/
+!/scripts/*.sh
+CLAUDE.md
+.claude
+nul
+dist.zip
+data.json
+src/main/java/boss/data.json
+merge_prs.log
+cookie.json
+chromedriver
+*.jpg
+
+/docs

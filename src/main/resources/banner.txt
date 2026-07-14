@@ -1,0 +1,9 @@
+${AnsiColor.BRIGHT_RED}       _       __                                        __
+${AnsiColor.BRIGHT_YELLOW}      (_)___  / /_  _____     ________  ____ ___________/ /_
+${AnsiColor.BRIGHT_GREEN}     / / __ \/ __ \/ ___/    / ___/ _ \/ __ `/ ___/ ___/ __ \
+${AnsiColor.BRIGHT_CYAN}    / / /_/ / /_/ (__  )    (__  )  __/ /_/ / /  / /__/ / / /
+${AnsiColor.BRIGHT_BLUE} __/ /\____/_.___/____/____/____/\___/\__,_/_/   \___/_/ /_/
+${AnsiColor.BRIGHT_MAGENTA}/___/                /_____/
+${AnsiColor.DEFAULT}
+${AnsiStyle.BOLD}${AnsiColor.BRIGHT_GREEN}Spring Boot: ${spring-boot.formatted-version}${AnsiStyle.NORMAL}${AnsiColor.DEFAULT}
+${AnsiColor.BRIGHT_RED}${AnsiStyle.BOLD}jobs_search · Update By Github@de-luce · Create By Github@loks666.${AnsiStyle.NORMAL}${AnsiColor.DEFAULT}

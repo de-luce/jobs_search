@@ -1,0 +1,31 @@
+package com.getjobs.application.entity;
+
+import com.mybatisflex.annotation.Id;
+import com.mybatisflex.annotation.KeyType;
+import com.mybatisflex.annotation.Table;
+import lombok.Data;
+
+import java.time.LocalDateTime;
+
+@Data
+@Table("zhilian_config")
+public class ZhilianConfigEntity {
+    @Id(keyType = KeyType.Auto)
+    /** 主键ID */
+    private Long id;
+
+    /** 搜索关键词（逗号或括号列表，例如 "[Java,后端]" 或 "Java,后端"） */
+    private String keywords;
+
+    /** 城市（中文名或代码，单值） */
+    private String cityCode;
+
+    /** 薪资范围（中文名或代码，单值） */
+    private String salary;
+
+    /** 创建时间 */
+    private LocalDateTime createdAt;
+
+    /** 更新时间 */
+    private LocalDateTime updatedAt;
+}

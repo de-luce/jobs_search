@@ -1,0 +1,9 @@
+package com.getjobs.application.mapper;
+
+import com.mybatisflex.core.BaseMapper;
+import com.getjobs.application.entity.ZhilianJobDataEntity;
+import org.apache.ibatis.annotations.Mapper;
+
+@Mapper
+public interface ZhilianJobDataMapper extends BaseMapper<ZhilianJobDataEntity> {
+}
