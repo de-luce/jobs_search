@@ -126,7 +126,9 @@ public class StartupRunner implements ApplicationRunner {
         }
         processBuilder.directory(frontDir.toFile());
         processBuilder.redirectErrorStream(true);
-        File logFile = frontDir.resolve("auto-dev-server.log").toFile();
+        Path logDir = Paths.get("target", "logs");
+        Files.createDirectories(logDir);
+        File logFile = logDir.resolve("auto-dev-server.log").toFile();
         processBuilder.redirectOutput(Redirect.appendTo(logFile));
         Process process = processBuilder.start();
         ownedFrontendProcess.set(process);
