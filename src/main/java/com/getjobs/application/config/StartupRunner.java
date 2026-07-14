@@ -253,6 +253,15 @@ public class StartupRunner implements ApplicationRunner {
     }
 
     private boolean hasStaticResources() {
-        return StaticResourceLocator.hasStaticResources();
+        try {
+            File distDir = new File("src/main/resources/dist");
+            if (distDir.exists() && distDir.isDirectory()) {
+                File[] files = distDir.listFiles(file -> !file.getName().startsWith("."));
+                return files != null && files.length > 0;
+            }
+        } catch (Exception e) {
+            log.debug("检查静态资源时出错: {}", e.getMessage());
+        }
+        return false;
     }
 }

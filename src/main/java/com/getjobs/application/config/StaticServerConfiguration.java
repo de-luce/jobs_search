@@ -7,22 +7,29 @@ import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 /**
  * 静态资源服务器配置
- * 当前端 dev 服务未运行时，在 6866 端口提供 Vue 构建产物（resources/dist）
+ * 当前端 dev 服务未运行时，在 6866 端口提供静态资源
  */
 @Slf4j
 @Configuration
 public class StaticServerConfiguration {
     private static final int FRONTEND_PORT = 6866;
+    private static final String DIST_PATH = "src/main/resources/dist";
+    private static final String STATIC_PATH = "src/main/resources/static";
 
     @Bean
     public WebServerFactoryCustomizer<TomcatServletWebServerFactory> servletContainer() {
         return server -> {
+            // 检查前端 dev 服务是否运行
             boolean hasFrontendDev = detectFrontendDevServer();
 
             if (hasFrontendDev) {
@@ -30,8 +37,11 @@ public class StaticServerConfiguration {
                 return;
             }
 
-            if (StaticResourceLocator.hasStaticResources()) {
-                log.info("未检测到前端开发服务，但找到静态资源（文件系统或 classpath）");
+            // 检查是否有静态资源
+            boolean hasStaticResources = checkStaticResources();
+
+            if (hasStaticResources) {
+                log.info("未检测到前端开发服务，但找到静态资源");
                 log.info("配置额外端口 {} 用于提供静态资源", FRONTEND_PORT);
 
                 Connector connector = new Connector(TomcatServletWebServerFactory.DEFAULT_PROTOCOL);
@@ -43,7 +53,12 @@ public class StaticServerConfiguration {
         };
     }
 
+    /**
+     * 探测前端开发服务器是否在运行
+     * 尝试 IPv4 和 IPv6
+     */
     private boolean detectFrontendDevServer() {
+        // 尝试多个地址：IPv4 和 IPv6
         String[] hosts = {"127.0.0.1", "[::1]", "localhost"};
 
         for (String host : hosts) {
@@ -74,5 +89,40 @@ public class StaticServerConfiguration {
 
         log.debug("前端开发服务检测失败，已尝试所有地址");
         return false;
+    }
+
+    /**
+     * 检查静态资源是否存在
+     */
+    private boolean checkStaticResources() {
+        Path distPath = Paths.get(DIST_PATH);
+        Path staticPath = Paths.get(STATIC_PATH);
+
+        log.info("检查静态资源路径:");
+        log.info("  dist路径: {} (绝对路径: {})", DIST_PATH, distPath.toAbsolutePath());
+        log.info("  static路径: {} (绝对路径: {})", STATIC_PATH, staticPath.toAbsolutePath());
+
+        boolean hasDist = hasContent(distPath);
+        boolean hasStatic = hasContent(staticPath);
+
+        log.info("  dist存在: {}", hasDist);
+        log.info("  static存在: {}", hasStatic);
+
+        return hasDist || hasStatic;
+    }
+
+    /**
+     * 检查目录是否有内容
+     */
+    private boolean hasContent(Path path) {
+        try {
+            if (!Files.exists(path)) {
+                return false;
+            }
+            return Files.list(path).findAny().isPresent();
+        } catch (IOException e) {
+            log.error("检查路径失败: {}", path, e);
+            return false;
+        }
     }
 }
