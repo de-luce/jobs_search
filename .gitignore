@@ -63,13 +63,10 @@ config.yaml
 *.sh
 !/scripts/
 !/scripts/*.sh
-!/scripts/release/
-!/scripts/release/*.sh
 CLAUDE.md
 .claude
 nul
 dist.zip
-release/
 data.json
 src/main/java/boss/data.json
 merge_prs.log

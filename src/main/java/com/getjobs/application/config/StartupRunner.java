@@ -4,7 +4,6 @@ import com.getjobs.worker.manager.PlaywrightManager;
 import jakarta.annotation.PreDestroy;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
@@ -22,7 +21,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 应用启动后：
- * 1. 确保前端管理页可访问（未启动则自动 npm run dev）
+ * 1. 确保 Vue 管理页可访问（未启动则自动 npm run dev）
  * 2. 使用 Playwright Chrome 打开管理页面
  * 3. 后端关闭时一并结束由本进程拉起的前端 dev 服务
  */
@@ -34,9 +33,6 @@ public class StartupRunner implements ApplicationRunner {
     private static final String FRONTEND_HOST = "127.0.0.1";
     private static final String FRONTEND_URL = "http://" + FRONTEND_HOST + ":" + FRONTEND_PORT;
     private static final int FRONTEND_START_TIMEOUT_SEC = 120;
-
-    @Value("${server.port:8888}")
-    private int backendPort;
 
     @Resource
     private PlaywrightManager playwrightManager;
@@ -73,48 +69,34 @@ public class StartupRunner implements ApplicationRunner {
     }
 
     /**
-     * 确保前端可访问，返回应打开的 URL
+     * 确保 Vue 前端可访问，返回应打开的 URL
      */
     private String ensureFrontendReady() throws InterruptedException, IOException {
         if (isServiceRunning(FRONTEND_PORT)) {
-            log.info("检测到前端服务已在端口 {} 运行（外部进程，后端退出时不会关闭）", FRONTEND_PORT);
+            log.info("检测到 Vue 前端已在端口 {} 运行（外部进程，后端退出时不会关闭）", FRONTEND_PORT);
             return FRONTEND_URL;
-        }
-
-        if (hasStaticResources()) {
-            log.info("未检测到前端 dev 服务，但存在静态资源，等待端口 {} 就绪", FRONTEND_PORT);
-            if (waitForService(FRONTEND_PORT, 15)) {
-                return FRONTEND_URL;
-            }
         }
 
         Path frontDir = resolveFrontDirectory();
         if (frontDir == null) {
-            log.warn("未找到 front 目录，无法自动启动前端");
-            return fallbackBackendUrl();
+            log.warn("未找到 front 目录，无法自动启动 Vue 前端");
+            return null;
         }
 
         if (!isCommandAvailable("npm")) {
-            log.warn("未检测到 npm 命令，无法自动启动前端");
-            return fallbackBackendUrl();
+            log.warn("未检测到 npm 命令，无法自动启动 Vue 前端（请手动: cd front && npm run dev）");
+            return null;
         }
 
         log.info("前端未启动，正在自动执行: cd {} && npm run dev", frontDir);
         startFrontendDevServer(frontDir);
 
         if (waitForService(FRONTEND_PORT, FRONTEND_START_TIMEOUT_SEC)) {
-            log.info("前端 dev 服务已就绪: {}", FRONTEND_URL);
+            log.info("Vue 前端已就绪: {}", FRONTEND_URL);
             return FRONTEND_URL;
         }
 
         log.warn("等待前端启动超时（{}秒），请手动执行: cd front && npm run dev", FRONTEND_START_TIMEOUT_SEC);
-        return null;
-    }
-
-    private String fallbackBackendUrl() {
-        if (hasStaticResources()) {
-            return "http://localhost:" + backendPort;
-        }
         return null;
     }
 
@@ -140,7 +122,6 @@ public class StartupRunner implements ApplicationRunner {
         if (os.contains("win")) {
             processBuilder = new ProcessBuilder("cmd.exe", "/c", "npm", "run", "dev");
         } else {
-            // 用 bash -lc 便于带上用户 PATH；子进程挂到可追踪的进程树
             processBuilder = new ProcessBuilder("npm", "run", "dev");
         }
         processBuilder.directory(frontDir.toFile());
@@ -149,7 +130,7 @@ public class StartupRunner implements ApplicationRunner {
         processBuilder.redirectOutput(Redirect.appendTo(logFile));
         Process process = processBuilder.start();
         ownedFrontendProcess.set(process);
-        log.info("前端 dev 进程已后台启动 (pid={})，日志: {}", process.pid(), logFile.getAbsolutePath());
+        log.info("Vue 前端进程已后台启动 (pid={})，日志: {}", process.pid(), logFile.getAbsolutePath());
     }
 
     private void stopOwnedFrontend() {
@@ -158,10 +139,10 @@ public class StartupRunner implements ApplicationRunner {
             return;
         }
         if (!process.isAlive()) {
-            log.info("前端 dev 进程已退出，无需关闭");
+            log.info("Vue 前端进程已退出，无需关闭");
             return;
         }
-        log.info("后端关闭，正在结束前端 dev 进程树 (pid={})...", process.pid());
+        log.info("后端关闭，正在结束 Vue 前端进程树 (pid={})...", process.pid());
         try {
             destroyProcessTree(process, false);
             if (!process.waitFor(8, TimeUnit.SECONDS)) {
@@ -169,7 +150,7 @@ public class StartupRunner implements ApplicationRunner {
                 destroyProcessTree(process, true);
                 process.waitFor(3, TimeUnit.SECONDS);
             }
-            log.info("前端 dev 进程已关闭");
+            log.info("Vue 前端进程已关闭");
         } catch (Exception e) {
             log.warn("关闭前端进程失败: {}", e.getMessage());
             try {
@@ -182,7 +163,6 @@ public class StartupRunner implements ApplicationRunner {
     private void destroyProcessTree(Process process, boolean forcibly) {
         try {
             ProcessHandle handle = process.toHandle();
-            // 先杀子孙（vite/node），再杀自身
             handle.descendants().forEach(child -> {
                 try {
                     if (forcibly) {
@@ -248,19 +228,6 @@ public class StartupRunner implements ApplicationRunner {
                 }
             } catch (Exception ignored) {
             }
-        }
-        return false;
-    }
-
-    private boolean hasStaticResources() {
-        try {
-            File distDir = new File("src/main/resources/dist");
-            if (distDir.exists() && distDir.isDirectory()) {
-                File[] files = distDir.listFiles(file -> !file.getName().startsWith("."));
-                return files != null && files.length > 0;
-            }
-        } catch (Exception e) {
-            log.debug("检查静态资源时出错: {}", e.getMessage());
         }
         return false;
     }
