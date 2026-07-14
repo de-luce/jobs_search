@@ -85,6 +85,8 @@ public class PlaywrightManager {
     private volatile boolean zhilianLoginGuided = false;
     // 记录 Boss 是否已引导过登录页（避免反复 navigate 导致登录页一直刷新）
     private volatile boolean bossLoginGuided = false;
+    // 二维码登录切换仅尝试一次，避免反复 click 导致登录页刷新
+    private volatile boolean bossQrSwitchDone = false;
 
     // 默认超时时间（毫秒）
   private static final int DEFAULT_TIMEOUT = 30000;
@@ -320,20 +322,20 @@ public class PlaywrightManager {
             }
 
             boolean loggedIn = refreshPlatformLoginStatus(normalized);
-            if (!loggedIn && "boss".equals(normalized) && !bossMonitoringPaused) {
-                if (forceLogin) {
-                    // 用户主动点「打开登录页」：允许再次引导
-                    bossLoginGuided = false;
-                    ensureBossLoginPageVisible(true);
-                } else {
-                    // 常规 open（路由同步 / 投递前）：整个 Page 只引导一次，避免登录成功或投递页被反复刷新
-                    guideBossLoginOnce();
+            if ("boss".equals(normalized) && !bossMonitoringPaused && bossPage != null) {
+                // 以页面 DOM/Cookie 为准再判一次，避免缓存登录态滞后导致误拉回登录页
+                if (checkIfLoggedIn()) {
+                    loggedIn = true;
+                    bossLoginGuided = true;
+                    setLoginStatus("boss", true);
+                } else if (!loggedIn) {
+                    if (forceLogin) {
+                        ensureBossLoginPageVisible(true);
+                    } else {
+                        guideBossLoginOnce();
+                    }
+                    loggedIn = refreshPlatformLoginStatus(normalized);
                 }
-            }
-
-            // forceLogin 可能改变 URL，再读一次状态
-            if (forceLogin && "boss".equals(normalized)) {
-                loggedIn = refreshPlatformLoginStatus(normalized);
             }
 
             Map<String, Object> result = new HashMap<>();
@@ -380,6 +382,7 @@ public class PlaywrightManager {
             bossPage = null;
             bossMonitoringPaused = false;
             bossLoginGuided = false;
+            bossQrSwitchDone = false;
         }
         if (!"liepin".equals(keepPlatform)) {
             closePageQuietly("liepin", liepinPage);
@@ -416,6 +419,10 @@ public class PlaywrightManager {
     private Page ensureBossPageReady() {
         if (bossPage != null && !bossPage.isClosed()) {
             log.info("Boss Page 已存在，跳过重复初始化");
+            if (checkIfLoggedIn()) {
+                bossLoginGuided = true;
+                setLoginStatus("boss", true);
+            }
             return bossPage;
         }
         bossPage = context.newPage();
@@ -440,6 +447,7 @@ public class PlaywrightManager {
     private Page ensure51jobPageReady() {
         if (job51Page != null && !job51Page.isClosed()) {
             log.info("51job Page 已存在，跳过重复初始化");
+            warmUp51jobWeDomainIfNeeded();
             return job51Page;
         }
         job51Page = context.newPage();
@@ -603,11 +611,18 @@ public class PlaywrightManager {
             return;
         }
         try {
+            if (checkIfLoggedIn()) {
+                bossLoginGuided = true;
+                log.debug("Boss 已登录，跳过登录页导航");
+                return;
+            }
+
             String currentUrl = safePageUrl(bossPage);
 
             // 已进入求职端工作区：视为登录成功，禁止再 navigate 登录页（否则登录后/投递页会一直刷新）
             if (isBossLoggedInWorkspaceUrl(currentUrl)) {
                 bossLoginGuided = true;
+                setLoginStatus("boss", true);
                 log.debug("Boss 已在登录工作区，跳过登录页引导: {}", currentUrl);
                 return;
             }
@@ -627,12 +642,13 @@ public class PlaywrightManager {
                     Thread.currentThread().interrupt();
                 }
                 bossLoginGuided = true;
+                bossQrSwitchDone = false;
                 forceQrSwitch = true;
             } else if (!bossLoginGuided) {
                 bossLoginGuided = true;
             }
 
-            if (forceQrSwitch) {
+            if (forceQrSwitch && !bossQrSwitchDone) {
                 trySwitchBossQrLogin();
             }
         } catch (Exception e) {
@@ -641,10 +657,14 @@ public class PlaywrightManager {
     }
 
     private void trySwitchBossQrLogin() {
+        if (bossQrSwitchDone) {
+            return;
+        }
         try {
             Locator qrPane = bossPage.locator(".qr-code-box, .qrcode-img, img.qr-code-img, canvas.login-qrcode").first();
             if (qrPane.count() > 0 && qrPane.isVisible()) {
                 log.info("Boss 已在扫码登录态，跳过切换按钮");
+                bossQrSwitchDone = true;
                 return;
             }
 
@@ -652,23 +672,28 @@ public class PlaywrightManager {
             if (qrSwitch.count() > 0 && qrSwitch.isVisible()) {
                 qrSwitch.click();
                 log.info("已切换 Boss 二维码登录");
+                bossQrSwitchDone = true;
                 return;
             }
             Locator tip = bossPage.getByText("APP扫码登录").first();
             if (tip.count() > 0 && tip.isVisible()) {
                 tip.click();
                 log.info("已点击包含文本的二维码登录切换提示（APP扫码登录）");
+                bossQrSwitchDone = true;
                 return;
             }
             Locator legacy = bossPage.locator("li.sign-switch-tip").first();
             if (legacy.count() > 0 && legacy.isVisible()) {
                 legacy.click();
                 log.info("已通过旧版选择器切换二维码登录（li.sign-switch-tip）");
+                bossQrSwitchDone = true;
                 return;
             }
             log.info("未找到二维码登录切换按钮，保持当前登录页");
+            bossQrSwitchDone = true;
         } catch (Exception e) {
             log.debug("切换二维码登录失败: {}", e.getMessage());
+            bossQrSwitchDone = true;
         }
     }
 
@@ -677,6 +702,11 @@ public class PlaywrightManager {
      */
     private void guideBossLoginOnce() {
         if (bossLoginGuided || bossPage == null || bossPage.isClosed()) {
+            return;
+        }
+        if (checkIfLoggedIn()) {
+            bossLoginGuided = true;
+            setLoginStatus("boss", true);
             return;
         }
         ensureBossLoginPageVisible(true);
@@ -1096,6 +1126,7 @@ public class PlaywrightManager {
                 }
             } else {
                 log.info("51job已登录");
+                warmUp51jobWeDomainIfNeeded();
             }
         } catch (Exception e) {
             log.warn("51job页面初始化检查失败: {}", e.getMessage());
@@ -1186,6 +1217,33 @@ public class PlaywrightManager {
 
         // 登录成功时保存 Cookie 到数据库
         save51jobCookiesToDatabase("login success");
+
+        // 登录页在 login/www 子域，先进入 we 子域，避免后续打开搜索页白屏
+        warmUp51jobWeDomainIfNeeded();
+    }
+
+    /**
+     * 已登录但页面仍在 login/www 时，先打开 we 子域首页完成会话切换
+     */
+    private void warmUp51jobWeDomainIfNeeded() {
+        try {
+            if (job51Page == null || job51Page.isClosed()) {
+                return;
+            }
+            if (!checkIf51jobLoggedIn()) {
+                return;
+            }
+            String url = job51Page.url();
+            if (url != null && url.contains("we.51job.com")) {
+                return;
+            }
+            log.info("51job 已登录，从 {} 预热 we.51job.com 子域", url);
+            job51Page.navigate("https://we.51job.com/pc/", new Page.NavigateOptions()
+                    .setTimeout(60000)
+                    .setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+        } catch (Exception e) {
+            log.debug("预热 51job we 子域失败: {}", e.getMessage());
+        }
     }
 
     /**
@@ -1837,6 +1895,7 @@ public class PlaywrightManager {
         setLoginStatus(platform, true);
         if ("boss".equals(platform)) {
             bossLoginGuided = true;
+            bossQrSwitchDone = true;
             saveBossCookiesToDatabase("login success");
         }
     }
@@ -1873,6 +1932,7 @@ public class PlaywrightManager {
     public void clearBossCookies() {
         clearCookiesByDomain(BOSS_DOMAIN);
         bossLoginGuided = false;
+        bossQrSwitchDone = false;
         setLoginStatus("boss", false);
     }
 

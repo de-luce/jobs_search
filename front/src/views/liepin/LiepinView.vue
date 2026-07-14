@@ -265,16 +265,18 @@ const handleStartDelivery = async () => {
 }
 
 const handleStopDelivery = async () => {
+  setDelivering(false)
   try {
     const response = await fetch(`${API}/api/liepin/stop`, { method: 'POST' })
     const data = await response.json()
-    if (data.success) {
-      setDelivering(false)
-      void refreshDeliveryStatus()
-    } else {
+    setDelivering(false)
+    void refreshDeliveryStatus()
+    if (!data.success) {
       console.warn('停止失败：', data.message)
     }
   } catch (error) {
+    setDelivering(false)
+    void refreshDeliveryStatus()
     console.error('Failed to stop delivery:', error)
   }
 }

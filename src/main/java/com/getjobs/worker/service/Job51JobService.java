@@ -41,6 +41,9 @@ public class Job51JobService implements JobPlatformService {
             return;
         }
 
+        isRunning = true;
+        shouldStop = false;
+
         try {
             playwrightManager.openPlatform(PLATFORM);
             // 获取51job页面实例
@@ -55,10 +58,6 @@ public class Job51JobService implements JobPlatformService {
                 progressCallback.accept(JobProgressMessage.error(PLATFORM, "请先登录51job"));
                 return;
             }
-
-            // 通过校验后再标记运行
-            isRunning = true;
-            shouldStop = false;
 
             // 暂停后台登录监控，避免与投递流程并发访问同一Page
             playwrightManager.pause51jobMonitoring();
@@ -111,10 +110,8 @@ public class Job51JobService implements JobPlatformService {
 
     @Override
     public void stopDelivery() {
-        if (isRunning) {
-            log.info("收到停止51job投递任务的请求");
-            shouldStop = true;
-        }
+        log.info("收到停止51job投递任务的请求，isRunning={}", isRunning);
+        shouldStop = true;
     }
 
     @Override

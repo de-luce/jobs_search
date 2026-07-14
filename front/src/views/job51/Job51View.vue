@@ -54,8 +54,10 @@ const isCustomArea = ref(false)
 const backendAvailable = ref(false)
 const cookieSavedAfterLogin = ref(false)
 const selectedSalaries = ref<string[]>([])
+const deliveryMessage = ref('')
 
 let sseClient: ReturnType<typeof createSSEWithBackoff> | null = null
+let progressSseClient: ReturnType<typeof createSSEWithBackoff> | null = null
 
 async function fetchAllData() {
   try {
@@ -188,6 +190,10 @@ onMounted(async () => {
     backendAvailable.value = ok
     if (ok) {
       await fetchAllData()
+      await refreshDeliveryStatus()
+      if (isDelivering.value) {
+        setupDeliveryProgressSSE()
+      }
     } else {
       loadingConfig.value = false
     }
@@ -199,43 +205,81 @@ onMounted(async () => {
 
 onUnmounted(() => {
   sseClient?.close()
+  progressSseClient?.close()
+})
+
+function setupDeliveryProgressSSE() {
+  if (typeof window === 'undefined' || typeof EventSource === 'undefined') return
+
+  progressSseClient?.close()
+  progressSseClient = createSSEWithBackoff(`${API}/api/51job/stream`, {
+    onError: () => {},
+    listeners: [
+      {
+        name: 'progress',
+        handler: (event) => {
+          try {
+            const data = JSON.parse(event.data)
+            if (data.message) deliveryMessage.value = data.message
+          } catch {
+            // ignore
+          }
+        },
+      },
+      { name: 'connected', handler: () => {} },
+      { name: 'ping', handler: () => {} },
+    ],
+  })
+}
+
+watch(isDelivering, (running) => {
+  if (running) {
+    deliveryMessage.value = '投递任务已启动，等待浏览器加载搜索结果...'
+    setupDeliveryProgressSSE()
+    return
+  }
+  progressSseClient?.close()
+  progressSseClient = null
 })
 
 watch([backendAvailable, cookieSavedAfterLogin], () => {
   sseClient?.close()
   void setupLoginSSE()
-})
+}, { immediate: true })
 
 async function handleStartDelivery() {
   try {
+    deliveryMessage.value = '正在启动投递任务...'
+    setupDeliveryProgressSSE()
     const response = await fetch(`${API}/api/51job/start`, { method: 'POST' })
     const data = await response.json()
     if (data.success) {
       setDelivering(true)
       void refreshDeliveryStatus()
     } else {
+      deliveryMessage.value = data.message || '启动失败'
       console.warn('[51job] 启动失败：', data.message)
     }
   } catch (error) {
+    deliveryMessage.value = '启动投递失败，请检查后端是否运行'
     console.error('[51job] 启动投递失败：', error)
   }
 }
 
 async function handleStopDelivery() {
+  setDelivering(false)
   try {
     const response = await fetch(`${API}/api/51job/stop`, { method: 'POST' })
     if (!response.ok) {
       console.warn('[51job] 停止投递请求失败，状态码:', response.status)
-      return
     }
     const data = await response.json()
-    if (data.success) {
-      setDelivering(false)
-      void refreshDeliveryStatus()
-    } else {
-      console.warn('[51job] 停止投递失败:', data.message)
-    }
+    setDelivering(false)
+    deliveryMessage.value = data.message || '投递任务已停止'
+    void refreshDeliveryStatus()
   } catch (error) {
+    setDelivering(false)
+    void refreshDeliveryStatus()
     console.error('[51job] 停止投递请求异常:', error)
   }
 }
@@ -343,6 +387,13 @@ function toggleCustomArea() {
 
     <PlatformTabs>
       <template #config>
+        <p
+          v-if="deliveryMessage"
+          class="rounded-lg border border-amber-200/60 bg-amber-50/80 px-4 py-3 text-sm text-amber-900"
+        >
+          {{ deliveryMessage }}
+        </p>
+
         <PlatformInfoCard platform="51job">
           <template #icon>
             <Icon icon="bi:briefcase" />

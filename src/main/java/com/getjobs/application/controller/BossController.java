@@ -124,14 +124,11 @@ public class BossController {
     public ResponseEntity<Map<String, Object>> stopBoss() {
         Map<String, Object> response = new HashMap<>();
         try {
-            if (!bossJobService.isRunning()) {
-                response.put("success", false);
-                response.put("message", "没有正在运行的Boss任务");
-                return ResponseEntity.badRequest().body(response);
-            }
             bossJobService.stopDelivery();
             response.put("success", true);
-            response.put("message", "Boss任务停止请求已发送");
+            response.put("message", bossJobService.isRunning()
+                ? "Boss任务停止请求已发送"
+                : "Boss任务未在运行，已记录停止请求");
             log.info("通过API停止Boss任务");
             return ResponseEntity.ok(response);
         } catch (Exception e) {

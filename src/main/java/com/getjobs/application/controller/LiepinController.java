@@ -120,16 +120,12 @@ public class LiepinController {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            if (!liepinJobService.isRunning()) {
-                response.put("success", false);
-                response.put("message", "没有正在运行的猎聘任务");
-                return ResponseEntity.badRequest().body(response);
-            }
-
             liepinJobService.stopDelivery();
 
             response.put("success", true);
-            response.put("message", "猎聘任务停止请求已发送");
+            response.put("message", liepinJobService.isRunning()
+                ? "猎聘任务停止请求已发送"
+                : "猎聘任务未在运行，已记录停止请求");
 
             log.info("通过API停止猎聘任务");
             return ResponseEntity.ok(response);

@@ -46,6 +46,8 @@ public class ZhiLian {
     private int maxPage = 500;
 
     private static final String HOME_URL = "https://www.zhaopin.com/sou/";
+    /** 当前关键词搜索页 URL，投递后若主页面跳走则用于恢复 */
+    private String currentSearchUrl;
 
     private final ZhilianService zhilianService;
     private final BlacklistService blacklistService;
@@ -136,6 +138,7 @@ public class ZhiLian {
             sendProgress("正在搜索关键词: " + keyword, null, null);
 
             // 导航到搜索页面（路径参数：jl+城市码 + p1 + sl）
+            currentSearchUrl = baseUrl;
             page.navigate(baseUrl);
             PlaywrightUtil.sleep(2);
 
@@ -253,7 +256,7 @@ public class ZhiLian {
                 String location = safeGetText(card, "div.jobinfo__other-info div.jobinfo__other-info-item > span");
                 String experience = safeGetText(card, "div.jobinfo__other-info-item:nth-child(2)");
                 String degree = safeGetText(card, "div.jobinfo__other-info-item:nth-child(3)");
-                String companyName = safeGetText(card, "div.companyinfo__name");
+                String companyName = extractCompanyName(card);
 
                 String jobId = extractJobIdFromLink(jobLink);
 
@@ -321,26 +324,8 @@ public class ZhiLian {
                     continue;
                 }
                 try {
-                    // 点击前：注册监听器，统一关闭由当前页面打开的新窗口（弹出页）
-                    java.util.function.Consumer<Page> closer = (Page newPage) -> {
-                        try {
-                            // 只关闭由当前 page 打开的子窗口，避免误伤
-                            if (newPage.opener() == page) {
-                                try { newPage.waitForLoadState(); } catch (Exception ignored) {}
-                                try { PlaywrightUtil.sleep(200); } catch (Exception ignored) {}
-                                try { newPage.close(); } catch (Exception ignored) {}
-                            }
-                        } catch (Exception ignored) {}
-                    };
-                    page.context().onPage(closer);
-
-                    // 仅通过监听器捕捉并关闭由当前页打开的新窗口，避免与 waitForPopup 产生竞态
-                    try {
-                        applyBtn.click(); /* 点击投递按钮（关键定位注释：delivery-click-line）*/
-                    } finally {
-                        // 取消监听，避免影响后续流程
-                        try { page.context().offPage(closer); } catch (Exception ignored) {}
-                    }
+                    clickApplyAndClosePopup(applyBtn);
+                    ensureOnSearchListPage();
 
                     try {
                         if (pj.jobId != null && !pj.jobId.isEmpty()) {
@@ -583,6 +568,166 @@ public class ZhiLian {
             }
         } catch (Exception ignored) {}
         return null;
+    }
+
+    /**
+     * 提取岗位卡片中的公司名称（智联当前为 a.companyinfo__name，title 属性更完整）
+     */
+    private String extractCompanyName(Locator card) {
+        String[] selectors = {
+            "a.companyinfo__name",
+            ".companyinfo__name",
+            "[class*='companyinfo__name']"
+        };
+        for (String sel : selectors) {
+            try {
+                Locator elements = card.locator(sel);
+                if (elements.count() == 0) {
+                    continue;
+                }
+                Locator element = elements.first();
+                String title = element.getAttribute("title");
+                if (title != null && !title.isBlank()) {
+                    return title.trim();
+                }
+                String text = element.textContent();
+                if (text != null && !text.isBlank()) {
+                    return text.trim();
+                }
+            } catch (Exception ignored) {}
+        }
+        return "";
+    }
+
+    /**
+     * 点击投递并关闭弹窗/新标签；无弹窗时仅执行点击
+     */
+    private void clickApplyAndClosePopup(Locator applyBtn) {
+        Page mainPage = page;
+        int pagesBefore = mainPage.context().pages().size();
+
+        try {
+            applyBtn.scrollIntoViewIfNeeded();
+        } catch (Exception ignored) {}
+
+        try {
+            applyBtn.click(new Locator.ClickOptions().setTimeout(5000));
+        } catch (Exception e) {
+            log.warn("点击投递按钮失败: {}", e.getMessage());
+            return;
+        }
+
+        long deadline = System.currentTimeMillis() + 2500;
+        while (System.currentTimeMillis() < deadline) {
+            if (shouldStop()) {
+                return;
+            }
+            dismissInPageDeliveryOverlay(mainPage);
+            closeExtraPages(mainPage);
+            PlaywrightUtil.sleepMillis(200);
+        }
+
+        dismissInPageDeliveryOverlay(mainPage);
+        closeExtraPages(mainPage);
+
+        if (mainPage.context().pages().size() > pagesBefore) {
+            closeExtraPages(mainPage);
+        }
+    }
+
+    /**
+     * 关闭当前页上的投递成功/推荐职位弹层
+     */
+    private void dismissInPageDeliveryOverlay(Page mainPage) {
+        String[] closeSelectors = {
+            "img[title='close-icon']",
+            ".deliver-dialog img[title='close-icon']",
+            "button:has-text('我知道了')",
+            "button:has-text('关闭')",
+            ".zp-dialog__close",
+            "[class*='dialog'] [class*='close']"
+        };
+        for (String sel : closeSelectors) {
+            if (shouldStop()) {
+                return;
+            }
+            try {
+                Locator btn = mainPage.locator(sel);
+                if (btn.count() > 0 && btn.first().isVisible()) {
+                    btn.first().click(new Locator.ClickOptions().setTimeout(1000));
+                    PlaywrightUtil.sleepMillis(200);
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /**
+     * 投递后确保仍停留在搜索结果列表页
+     */
+    private void ensureOnSearchListPage() {
+        try {
+            String url = page.url();
+            if (url != null && url.contains("zhaopin.com/sou")) {
+                page.waitForSelector("div.joblist-box__item",
+                    new Page.WaitForSelectorOptions().setTimeout(5000));
+                return;
+            }
+            log.info("主页面已离开搜索结果，尝试返回列表页: {}", url);
+            try {
+                page.goBack(new Page.GoBackOptions().setTimeout(5000));
+            } catch (Exception ignored) {}
+            if (page.url() != null && page.url().contains("zhaopin.com/sou")) {
+                page.waitForSelector("div.joblist-box__item",
+                    new Page.WaitForSelectorOptions().setTimeout(8000));
+                return;
+            }
+            if (currentSearchUrl != null && !currentSearchUrl.isBlank()) {
+                page.navigate(currentSearchUrl);
+                page.waitForSelector("div.joblist-box__item",
+                    new Page.WaitForSelectorOptions().setTimeout(10000));
+            }
+        } catch (Exception e) {
+            log.warn("恢复搜索结果页失败: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 扫描并关闭除主列表页、本地管理页外的多余标签页
+     */
+    private void closeExtraPages(Page mainPage) {
+        for (Page p : page.context().pages()) {
+            if (p == mainPage || p.isClosed()) {
+                continue;
+            }
+            String url = safePageUrl(p);
+            if (shouldPreservePage(url)) {
+                continue;
+            }
+            try {
+                p.close();
+            } catch (Exception e) {
+                log.debug("关闭多余页面失败: {} | {}", url, e.getMessage());
+            }
+        }
+    }
+
+    private String safePageUrl(Page p) {
+        try {
+            return p.url();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private boolean shouldPreservePage(String url) {
+        if (url == null || url.isBlank()) {
+            return false;
+        }
+        return url.contains("127.0.0.1")
+            || url.contains("localhost")
+            || url.startsWith("about:")
+            || url.startsWith("chrome://")
+            || url.startsWith("devtools://");
     }
 
     /**

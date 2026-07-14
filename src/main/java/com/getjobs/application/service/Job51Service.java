@@ -74,6 +74,7 @@ public class Job51Service {
         for (String input : salaryInputs) {
             if (input == null || input.isEmpty()) continue;
             String code = normalizeOptionCode("salary", input);
+            if (com.getjobs.worker.utils.Constant.UNLIMITED_CODE.equals(code)) continue;
             salaryCodes.add(code);
         }
         config.setSalary(salaryCodes);

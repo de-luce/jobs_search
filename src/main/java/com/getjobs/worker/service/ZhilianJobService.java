@@ -41,6 +41,9 @@ public class ZhilianJobService implements JobPlatformService {
             return;
         }
 
+        isRunning = true;
+        shouldStop = false;
+
         try {
             playwrightManager.openPlatform(PLATFORM);
             // 获取智联招聘页面实例
@@ -55,10 +58,6 @@ public class ZhilianJobService implements JobPlatformService {
                 progressCallback.accept(JobProgressMessage.error(PLATFORM, "请先登录智联招聘"));
                 return;
             }
-
-            // 通过校验后再标记运行
-            isRunning = true;
-            shouldStop = false;
 
             // 暂停后台登录监控，避免与投递流程并发访问同一Page
             playwrightManager.pauseZhilianMonitoring();
@@ -104,10 +103,8 @@ public class ZhilianJobService implements JobPlatformService {
 
     @Override
     public void stopDelivery() {
-        if (isRunning) {
-            log.info("收到停止智联招聘投递任务的请求");
-            shouldStop = true;
-        }
+        log.info("收到停止智联招聘投递任务的请求，isRunning={}", isRunning);
+        shouldStop = true;
     }
 
     @Override

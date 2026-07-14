@@ -319,16 +319,12 @@ public class ZhilianController {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            if (!zhilianJobService.isRunning()) {
-                response.put("success", false);
-                response.put("message", "没有正在运行的智联招聘任务");
-                return ResponseEntity.badRequest().body(response);
-            }
-
             zhilianJobService.stopDelivery();
 
             response.put("success", true);
-            response.put("message", "智联招聘任务停止请求已发送");
+            response.put("message", zhilianJobService.isRunning()
+                ? "智联招聘任务停止请求已发送"
+                : "智联招聘任务未在运行，已记录停止请求");
 
             log.info("通过API停止智联招聘任务");
             return ResponseEntity.ok(response);

@@ -153,16 +153,18 @@ async function handleStartDelivery() {
 }
 
 async function handleStopDelivery() {
+  setDelivering(false)
   try {
     const response = await fetch(`${API}/api/zhilian/stop`, { method: 'POST' })
     const data = await response.json()
-    if (data.success) {
-      setDelivering(false)
-      void refreshDeliveryStatus()
-    } else {
+    setDelivering(false)
+    void refreshDeliveryStatus()
+    if (!data.success) {
       console.warn('停止失败：', data.message)
     }
   } catch (error) {
+    setDelivering(false)
+    void refreshDeliveryStatus()
     console.error('停止投递失败：', error)
   }
 }

@@ -420,14 +420,11 @@ public class JobController {
     public ResponseEntity<Map<String, Object>> stop51jobJob() {
         Map<String, Object> response = new HashMap<>();
         try {
-            if (!job51JobService.isRunning()) {
-                response.put("success", false);
-                response.put("message", "没有正在运行的51job任务");
-                return ResponseEntity.badRequest().body(response);
-            }
             job51JobService.stopDelivery();
             response.put("success", true);
-            response.put("message", "51job任务停止请求已发送");
+            response.put("message", job51JobService.isRunning()
+                ? "51job任务停止请求已发送"
+                : "51job任务未在运行，已记录停止请求");
             log.info("通过API停止51job任务");
             return ResponseEntity.ok(response);
         } catch (Exception e) {

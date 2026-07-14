@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { Icon } from '@iconify/vue'
 import { createSSEWithBackoff } from '@/lib/sse'
-import { getApiBase, openPlatform } from '@/lib/platform'
+import { getApiBase } from '@/lib/platform'
 import { usePlatformDeliveryStatus } from '@/composables/useRealtime'
 import {
   parseKeywordsFromDb,
@@ -302,16 +302,18 @@ async function handleStartDelivery() {
 }
 
 async function handleStopDelivery() {
+  setDelivering(false)
   try {
     const response = await fetch(`${API}/api/boss/stop`, { method: 'POST' })
     const data = await response.json()
-    if (data.success) {
-      setDelivering(false)
-      void refreshDeliveryStatus()
-    } else {
+    setDelivering(false)
+    void refreshDeliveryStatus()
+    if (!data.success) {
       console.warn('停止失败：', data.message)
     }
   } catch (error) {
+    setDelivering(false)
+    void refreshDeliveryStatus()
     console.error('Failed to stop delivery:', error)
   }
 }
@@ -342,13 +344,10 @@ let cancelled = false
 onMounted(async () => {
   try {
     checkingLogin.value = true
-    const result = await openPlatform('boss', API)
-    if (cancelled) return
-    isLoggedIn.value = result.isLoggedIn ?? false
     await fetchAllData()
   } catch (error) {
     if (!cancelled) {
-      console.error('[Boss] 打开平台失败:', error)
+      console.error('[Boss] 加载配置失败:', error)
       checkingLogin.value = false
     }
     return

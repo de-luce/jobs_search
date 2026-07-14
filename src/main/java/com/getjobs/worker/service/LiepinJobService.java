@@ -45,6 +45,9 @@ public class LiepinJobService implements JobPlatformService {
             return;
         }
 
+        isRunning = true;
+        shouldStop = false;
+
         try {
             playwrightManager.openPlatform(PLATFORM);
             Page page = playwrightManager.getLiepinPage();
@@ -57,9 +60,6 @@ public class LiepinJobService implements JobPlatformService {
                 progressCallback.accept(JobProgressMessage.error(PLATFORM, "请先登录猎聘"));
                 return;
             }
-
-            isRunning = true;
-            shouldStop = false;
 
             // 暂停后台登录监控，避免并发访问冲突
             playwrightManager.pauseLiepinMonitoring();
@@ -110,11 +110,7 @@ public class LiepinJobService implements JobPlatformService {
 
     @Override
     public void stopDelivery() {
-        if (!isRunning) {
-            log.warn("猎聘任务未在运行，无需停止");
-            return;
-        }
-        log.info("收到停止猎聘任务请求");
+        log.info("收到停止猎聘任务请求，isRunning={}", isRunning);
         shouldStop = true;
     }
 
