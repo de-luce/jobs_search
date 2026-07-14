@@ -1,6 +1,5 @@
 package com.getjobs.application.controller;
 
-import com.getjobs.application.entity.BossJobDataEntity;
 import com.getjobs.application.service.BossService;
 import org.springframework.web.bind.annotation.*;
 
@@ -32,7 +31,10 @@ public class BossAnalyticsController {
             @RequestParam(value = "minK", required = false) Double minK,
             @RequestParam(value = "maxK", required = false) Double maxK,
             @RequestParam(value = "keyword", required = false) String keyword,
-            @RequestParam(value = "filterHeadhunter", required = false) Boolean filterHeadhunter
+            @RequestParam(value = "filterHeadhunter", required = false) Boolean filterHeadhunter,
+            @RequestParam(value = "industry", required = false) String industry,
+            @RequestParam(value = "scale", required = false) String scale,
+            @RequestParam(value = "stage", required = false) String stage
     ) {
         List<String> statusList = null;
         if (statuses != null && !statuses.trim().isEmpty()) {
@@ -49,7 +51,10 @@ public class BossAnalyticsController {
                 minK,
                 maxK,
                 keyword,
-                filterHeadhunter != null && filterHeadhunter
+                filterHeadhunter != null && filterHeadhunter,
+                industry,
+                scale,
+                stage
         );
     }
 
@@ -66,6 +71,9 @@ public class BossAnalyticsController {
             @RequestParam(value = "maxK", required = false) Double maxK,
             @RequestParam(value = "keyword", required = false) String keyword,
             @RequestParam(value = "filterHeadhunter", required = false) Boolean filterHeadhunter,
+            @RequestParam(value = "industry", required = false) String industry,
+            @RequestParam(value = "scale", required = false) String scale,
+            @RequestParam(value = "stage", required = false) String stage,
             @RequestParam(value = "page", required = false, defaultValue = "1") Integer page,
             @RequestParam(value = "size", required = false, defaultValue = "20") Integer size
     ) {
@@ -86,7 +94,10 @@ public class BossAnalyticsController {
                 keyword,
                 page,
                 size,
-                filterHeadhunter != null && filterHeadhunter
+                filterHeadhunter != null && filterHeadhunter,
+                industry,
+                scale,
+                stage
         );
     }
 

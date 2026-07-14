@@ -8,6 +8,7 @@ import com.getjobs.application.entity.BossJobDataEntity;
 import com.getjobs.application.mapper.BossConfigMapper;
 import com.getjobs.application.mapper.BossIndustryMapper;
 import com.getjobs.application.mapper.BossOptionMapper;
+import com.getjobs.application.utils.SalaryParseUtil;
 import com.getjobs.worker.boss.BossConfig;
 import com.mybatisflex.core.query.QueryChain;
 import com.mybatisflex.core.query.QueryWrapper;
@@ -29,8 +30,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static com.getjobs.application.entity.table.BossConfigTableDef.BOSS_CONFIG;
 import static com.getjobs.application.entity.table.BossIndustryTableDef.BOSS_INDUSTRY;
@@ -548,60 +547,17 @@ public class BossService {
     }
 
     /**
-     * 解析薪资字符串，支持示例：
-     *  - 20-40K
-     *  - 35-65K·16薪
-     *  - 30K·15薪
-     *  - 面议（返回null）
+     * 解析薪资字符串，统一换算为月薪 K（支持 K / 万 / 元 / 年薪）。
      */
     public static SalaryInfo parseSalary(String salary) {
-        if (salary == null) return null;
-        String s = salary.trim();
-        if (s.isEmpty()) return null;
-        if (s.contains("面议")) return null;
-        s = s.replace(" ", "");
-
-        Integer months = 12;
-        // 提取 months=xx（如 ·16薪）
-        Matcher mMonths = Pattern.compile("[·\\.\\-]?([0-9]+)薪").matcher(s);
-        if (mMonths.find()) {
-            try { months = Integer.parseInt(mMonths.group(1)); } catch (Exception ignore) {}
-            // 去掉薪资后缀以便解析区间
-            s = s.substring(0, mMonths.start());
-        }
-
-        // 提取区间或单值（K/k）
-        Integer minK = null, maxK = null;
-        Matcher mRange = Pattern.compile("^(\\d+)-(\\d+)[Kk]$").matcher(s);
-        Matcher mSingle = Pattern.compile("^(\\d+)[Kk]$").matcher(s);
-        if (mRange.find()) {
-            minK = Integer.parseInt(mRange.group(1));
-            maxK = Integer.parseInt(mRange.group(2));
-        } else if (mSingle.find()) {
-            minK = Integer.parseInt(mSingle.group(1));
-            maxK = minK;
-        } else {
-            // 尝试更宽松解析：去掉非数字和K以外字符
-            String cleaned = s.replaceAll("[^0-9Kk\\-]", "");
-            mRange = Pattern.compile("^(\\d+)-(\\d+)[Kk]$").matcher(cleaned);
-            mSingle = Pattern.compile("^(\\d+)[Kk]$").matcher(cleaned);
-            if (mRange.find()) {
-                minK = Integer.parseInt(mRange.group(1));
-                maxK = Integer.parseInt(mRange.group(2));
-            } else if (mSingle.find()) {
-                minK = Integer.parseInt(mSingle.group(1));
-                maxK = minK;
-            }
-        }
-
-        if (minK == null || maxK == null) return null;
-
+        SalaryParseUtil.SalaryInfo parsed = SalaryParseUtil.parse(salary);
+        if (parsed == null || parsed.medianK == null) return null;
         SalaryInfo info = new SalaryInfo();
-        info.minK = minK;
-        info.maxK = maxK;
-        info.months = months != null ? months : 12;
-        info.medianK = (minK + maxK) / 2.0;
-        info.annualTotal = Math.round(info.medianK * 1000 * info.months);
+        info.minK = parsed.minK == null ? null : (int) Math.round(parsed.minK);
+        info.maxK = parsed.maxK == null ? null : (int) Math.round(parsed.maxK);
+        info.months = parsed.months != null ? parsed.months : 12;
+        info.medianK = parsed.medianK;
+        info.annualTotal = parsed.annualTotal;
         return info;
     }
 
@@ -786,7 +742,10 @@ public class BossService {
             Double minK,
             Double maxK,
             String keyword,
-            boolean filterHeadhunter
+            boolean filterHeadhunter,
+            String industry,
+            String scale,
+            String stage
     ) {
         StatsResponse resp = new StatsResponse();
         resp.kpi = new Kpi();
@@ -807,9 +766,12 @@ public class BossService {
             if (statuses != null && !statuses.isEmpty()) {
                 wrapper.where(BOSS_JOB_DATA.DELIVERY_STATUS.in(statuses));
             }
-            if (StringUtils.hasText(location)) wrapper.and(BOSS_JOB_DATA.LOCATION.eq(location));
+            if (StringUtils.hasText(location)) wrapper.and(BOSS_JOB_DATA.LOCATION.like(location));
             if (StringUtils.hasText(experience)) wrapper.and(BOSS_JOB_DATA.EXPERIENCE.eq(experience));
             if (StringUtils.hasText(degree)) wrapper.and(BOSS_JOB_DATA.DEGREE.eq(degree));
+            if (StringUtils.hasText(industry)) wrapper.and(BOSS_JOB_DATA.INDUSTRY.like(industry));
+            if (StringUtils.hasText(scale)) wrapper.and(BOSS_JOB_DATA.COMPANY_SCALE.eq(scale));
+            if (StringUtils.hasText(stage)) wrapper.and(BOSS_JOB_DATA.FINANCING_STAGE.eq(stage));
 
             if (StringUtils.hasText(keyword)) {
                 wrapper.and(BOSS_JOB_DATA.COMPANY_NAME.like(keyword)
@@ -962,7 +924,10 @@ public class BossService {
             String keyword,
             int page,
             int size,
-            boolean filterHeadhunter
+            boolean filterHeadhunter,
+            String industry,
+            String scale,
+            String stage
     ) {
         if (page <= 0) page = 1;
         if (size <= 0) size = 20;
@@ -971,9 +936,12 @@ public class BossService {
         if (statuses != null && !statuses.isEmpty()) {
             wrapper.where(BOSS_JOB_DATA.DELIVERY_STATUS.in(statuses));
         }
-        if (StringUtils.hasText(location)) wrapper.and(BOSS_JOB_DATA.LOCATION.eq(location));
+        if (StringUtils.hasText(location)) wrapper.and(BOSS_JOB_DATA.LOCATION.like(location));
         if (StringUtils.hasText(experience)) wrapper.and(BOSS_JOB_DATA.EXPERIENCE.eq(experience));
         if (StringUtils.hasText(degree)) wrapper.and(BOSS_JOB_DATA.DEGREE.eq(degree));
+        if (StringUtils.hasText(industry)) wrapper.and(BOSS_JOB_DATA.INDUSTRY.like(industry));
+        if (StringUtils.hasText(scale)) wrapper.and(BOSS_JOB_DATA.COMPANY_SCALE.eq(scale));
+        if (StringUtils.hasText(stage)) wrapper.and(BOSS_JOB_DATA.FINANCING_STAGE.eq(stage));
 
         if (StringUtils.hasText(keyword)) {
             wrapper.and(BOSS_JOB_DATA.COMPANY_NAME.like(keyword)

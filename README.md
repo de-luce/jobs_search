@@ -33,6 +33,13 @@
 mvn spring-boot:run
 ```
 
+或一键脚本（缺库时建库、必要时装前端依赖）：
+
+```bash
+./scripts/start.sh          # macOS / Linux
+.\scripts\start.ps1         # Windows
+```
+
 启动后会：
 
 1. 拉起后端 API（默认 `http://127.0.0.1:8888`）
@@ -54,6 +61,23 @@ cd front
 npm run build:prod
 ```
 
+## 可分发封装（打开即管理页）
+
+把前端口、后端、SQLite schema 打进一个目录，目标机器**只需 JDK 21+ 和 Chrome**（无需 Maven / Node）：
+
+```bash
+./scripts/package.sh        # macOS / Linux → release/getjobs/ 与 release/getjobs.zip
+.\scripts\package.ps1       # Windows
+```
+
+将 `release/getjobs` 拷到本机任意位置后：
+
+- macOS / Linux：`./start.sh`
+- Windows：双击 `start.bat`
+
+首次启动会自动创建 `db/getjobs.db`，并打开管理页。配置与 Cookie 都留在该目录，备份即拷贝整个文件夹。
+
+> 本工具依赖本机 Chrome 与招聘站点交互，**不适合** Docker / 云服务器部署。
 ## 使用流程
 
 1. 打开管理页 → **环境配置** / **AI 配置**（如需 AI 招呼语与机器人通知）
@@ -71,7 +95,7 @@ npm run build:prod
 | 后端 API | `8888` |
 | 管理页 | `6866` |
 | SQLite | `./db/getjobs.db` |
-| 日志 | `./target/logs/jobs_search.log` |
+| 日志 | `./logs/jobs_search.log` |
 
 配置主要保存在 SQLite；AI 的 `BASE_URL` / `API_KEY` / `MODEL`、以及 `HOOK_URL` 可在管理页「环境配置」中维护。
 
@@ -93,7 +117,12 @@ npm run build:prod
 jobs_search/
 ├── front/                 # Vue 管理端
 ├── src/main/java/         # Spring Boot + 各平台 Worker
-├── src/main/resources/    # 配置、静态资源、反检测脚本等
-├── db/                    # SQLite 数据文件
+├── src/main/resources/    # 配置、schema、打包后的前端 dist
+├── db/                    # SQLite 数据文件（运行时）
+├── scripts/
+│   ├── start.*            # 开发态一键启动
+│   ├── package.*          # 打可分发包
+│   └── release/           # 分发包内启动脚本模板
+├── release/getjobs/       # package 产物（git 忽略）
 └── pom.xml
 ```

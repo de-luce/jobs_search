@@ -6,12 +6,12 @@ import Label from '@/components/ui/Label.vue'
 import Textarea from '@/components/ui/Textarea.vue'
 import AnalysisPageHeader from '@/components/analysis/AnalysisPageHeader.vue'
 import AnalysisKpiGrid from '@/components/analysis/AnalysisKpiGrid.vue'
-import { formatAvgSalaryK, type KpiItem } from '@/components/analysis/kpiHelpers'
+import { type KpiItem } from '@/components/analysis/kpiHelpers'
 import AnalysisFilterPanel from '@/components/analysis/AnalysisFilterPanel.vue'
 import AnalysisChartsGrid from '@/components/analysis/AnalysisChartsGrid.vue'
 import { buildChartConfigs } from '@/lib/chartConfigs'
 import AnalysisJobTable, { type TableColumn } from '@/components/analysis/AnalysisJobTable.vue'
-import { parseSalary } from '@/lib/salary'
+import { formatSalaryByUnit, parseSalary } from '@/lib/salary'
 import { useAnalysisRealtimeRefresh } from '@/composables/useRealtime'
 import { getApiBase } from '@/lib/platform'
 import {
@@ -22,8 +22,12 @@ import {
   PLATFORM_STATUS_OPTIONS,
   PLATFORM_HEADHUNTER_FILTER,
   PLATFORM_RELOAD,
+  PLATFORM_SALARY_UNIT,
+  toFilterOptions,
+  salaryKpiLabel,
   type StatsResponse,
   type AnalysisFilterState,
+  type AnalysisFilterOption,
   type PagedResult,
 } from '@/lib/analysis'
 
@@ -65,8 +69,31 @@ const loadingList = ref(false)
 const reloading = ref(false)
 const exporting = ref(false)
 const detailJob = ref<BossJob | null>(null)
+const salaryUnit = PLATFORM_SALARY_UNIT.boss
+const locationOptions = ref<AnalysisFilterOption[]>([])
+const experienceOptions = ref<AnalysisFilterOption[]>([])
+const degreeOptions = ref<AnalysisFilterOption[]>([])
+const industryOptions = ref<AnalysisFilterOption[]>([])
+const scaleOptions = ref<AnalysisFilterOption[]>([])
+const stageOptions = ref<AnalysisFilterOption[]>([])
 
-const filterParams = computed(() => filterToParams(filter.value))
+const filterParams = computed(() => filterToParams(filter.value, 'boss'))
+
+async function loadFilterOptions() {
+  try {
+    const res = await fetch(`${API}/api/boss/config`)
+    const data = await res.json()
+    const opts = data.options || {}
+    locationOptions.value = toFilterOptions(opts.city)
+    experienceOptions.value = toFilterOptions(opts.experience)
+    degreeOptions.value = toFilterOptions(opts.degree)
+    industryOptions.value = toFilterOptions(opts.industry)
+    scaleOptions.value = toFilterOptions(opts.scale)
+    stageOptions.value = toFilterOptions(opts.stage)
+  } catch (e) {
+    console.error('fetch boss filter options failed', e)
+  }
+}
 
 function filterHeadhunterRows(rows: BossJob[]) {
   return rows.filter((it) => {
@@ -114,6 +141,7 @@ function refreshAll() {
 }
 
 onMounted(() => {
+  void loadFilterOptions()
   void loadList(1, size.value)
   void loadStats()
 })
@@ -180,7 +208,7 @@ const totalPages = computed(() => Math.max(1, Math.ceil(total.value / size.value
 
 const avgSalaryDisplay = computed(() => {
   if (kpi.value?.avgMonthlyK != null && kpi.value.avgMonthlyK > 0) {
-    return formatAvgSalaryK(kpi.value.avgMonthlyK)
+    return formatSalaryByUnit(kpi.value.avgMonthlyK, salaryUnit)
   }
   const ks: number[] = []
   for (const it of items.value) {
@@ -188,7 +216,7 @@ const avgSalaryDisplay = computed(() => {
     if (info && !Number.isNaN(info.medianK)) ks.push(info.medianK)
   }
   if (!ks.length) return '—'
-  return formatAvgSalaryK(ks.reduce((a, b) => a + b, 0) / ks.length)
+  return formatSalaryByUnit(ks.reduce((a, b) => a + b, 0) / ks.length, salaryUnit)
 })
 
 const kpiItems = computed<KpiItem[]>(() => [
@@ -197,7 +225,7 @@ const kpiItems = computed<KpiItem[]>(() => [
   { label: '未投递', value: kpi.value?.pending ?? 0, highlight: 'pending' },
   { label: '已过滤', value: kpi.value?.filtered ?? 0, highlight: 'filtered' },
   { label: '失败', value: kpi.value?.failed ?? 0, highlight: 'failed' },
-  { label: '均薪(K)', value: avgSalaryDisplay.value, highlight: 'salary' },
+  { label: salaryKpiLabel('boss'), value: avgSalaryDisplay.value, highlight: 'salary' },
 ])
 
 const chartConfigs = computed(() =>
@@ -294,6 +322,14 @@ const detailFields: [string, keyof BossJob][] = [
       :loading-list="loadingList"
       :reloading="reloading"
       :exporting="exporting"
+      :salary-unit="salaryUnit"
+      :location-options="locationOptions"
+      :experience-options="experienceOptions"
+      :degree-options="degreeOptions"
+      :industry-options="industryOptions"
+      :scale-options="scaleOptions"
+      :stage-options="stageOptions"
+      experience-field-type="select"
       @update:filter="onFilterPatch"
       @apply="applyFilters"
       @reload="onReload"

@@ -251,7 +251,9 @@ public class LiepinController {
             @RequestParam(value = "degree", required = false) String degree,
             @RequestParam(value = "minK", required = false) Double minK,
             @RequestParam(value = "maxK", required = false) Double maxK,
-            @RequestParam(value = "keyword", required = false) String keyword
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "industry", required = false) String industry,
+            @RequestParam(value = "scale", required = false) String scale
     ) {
         java.util.List<String> statusList = null;
         if (statuses != null && !statuses.trim().isEmpty()) {
@@ -260,7 +262,7 @@ public class LiepinController {
                     .filter(s -> !s.isEmpty())
                     .collect(java.util.stream.Collectors.toList());
         }
-        return liepinService.getLiepinStats(statusList, location, experience, degree, minK, maxK, keyword);
+        return liepinService.getLiepinStats(statusList, location, experience, degree, minK, maxK, keyword, industry, scale);
     }
 
     /** 岗位列表（分页 + 筛选） */
@@ -273,6 +275,8 @@ public class LiepinController {
             @RequestParam(value = "minK", required = false) Double minK,
             @RequestParam(value = "maxK", required = false) Double maxK,
             @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "industry", required = false) String industry,
+            @RequestParam(value = "scale", required = false) String scale,
             @RequestParam(value = "page", required = false, defaultValue = "1") Integer page,
             @RequestParam(value = "size", required = false, defaultValue = "20") Integer size
     ) {
@@ -283,7 +287,7 @@ public class LiepinController {
                     .filter(s -> !s.isEmpty())
                     .collect(java.util.stream.Collectors.toList());
         }
-        return liepinService.listLiepinJobs(statusList, location, experience, degree, minK, maxK, keyword, page, size);
+        return liepinService.listLiepinJobs(statusList, location, experience, degree, minK, maxK, keyword, page, size, industry, scale);
     }
 
     /**

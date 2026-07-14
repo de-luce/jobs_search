@@ -6,53 +6,46 @@ export type SalaryInfo = {
   annualTotal: number
 }
 
+/** 各平台岗位薪资展示习惯（内部计算仍统一为月薪 K） */
+export type SalaryDisplayUnit = 'K' | '万' | '万/年'
+
 /**
- * 解析薪资字符串：如 "20-40K", "35-65K·16薪", "30K·15薪"；包含 "面议" 则返回 undefined
+ * 解析薪资字符串并换算为「月薪 K」（1K = 1000 元/月）。
+ * 支持：20-40K、1.5-2万、1.5-2万·13薪、25-41万/年、9000-16000元、6-8千
  */
 export function parseSalary(raw?: string): SalaryInfo | undefined {
   if (!raw) return undefined
   let s = raw.trim()
-  if (!s || s.includes("面议")) return undefined
-  s = s.replace(/\s+/g, "")
+  if (!s || s.includes('面议')) return undefined
+  s = s.replace(/\s+/g, '')
+  const original = s
+  const lower = s.toLowerCase()
 
   let months = 12
-  const monthsMatch = s.match(/([0-9]+)薪/)
-  if (monthsMatch) {
+  const monthsMatch = lower.match(/[·.\-]?([0-9]{1,2})薪/)
+  if (monthsMatch && monthsMatch.index != null) {
     months = Number(monthsMatch[1]) || 12
-    // 去掉薪资后缀以便解析区间
-    s = s.slice(0, s.indexOf(monthsMatch[0]))
-    // 某些源数据在 K 后还有多余符号（如 "30-60K-"），此处截断到最后的 K
-    const kIndex = Math.max(s.lastIndexOf("K"), s.lastIndexOf("k"))
-    if (kIndex >= 0) s = s.slice(0, kIndex + 1)
+    s = s.slice(0, monthsMatch.index)
   }
 
-  let minK: number | undefined
-  let maxK: number | undefined
-
-  const range = s.match(/^(\d+)-(\d+)[Kk]$/)
-  const single = s.match(/^(\d+)[Kk]$/)
+  const range = s.match(/(\d+(?:\.\d+)?)\s*[-~～—]+\s*(\d+(?:\.\d+)?)/)
+  const single = s.match(/(\d+(?:\.\d+)?)/)
+  let a: number | undefined
+  let b: number | undefined
   if (range) {
-    minK = Number(range[1])
-    maxK = Number(range[2])
+    a = Number(range[1])
+    b = Number(range[2])
   } else if (single) {
-    minK = Number(single[1])
-    maxK = minK
-  } else {
-    // 宽松解析：仅保留数字、K 与连字符
-    const cleaned = s.replace(/[^0-9Kk\-]/g, "")
-    const r2 = cleaned.match(/^(\d+)-(\d+)[Kk]$/)
-    const s2 = cleaned.match(/^(\d+)[Kk]$/)
-    if (r2) {
-      minK = Number(r2[1])
-      maxK = Number(r2[2])
-    } else if (s2) {
-      minK = Number(s2[1])
-      maxK = minK
-    }
+    a = Number(single[1])
+    b = a
   }
+  if (a == null || b == null || Number.isNaN(a) || Number.isNaN(b)) return undefined
 
-  if (minK == null || maxK == null) return undefined
-
+  const min = Math.min(a, b)
+  const max = Math.max(a, b)
+  const factor = resolveFactorToMonthlyK(lower, original)
+  const minK = min * factor
+  const maxK = max * factor
   const medianK = (minK + maxK) / 2
   return {
     minK,
@@ -61,4 +54,49 @@ export function parseSalary(raw?: string): SalaryInfo | undefined {
     medianK,
     annualTotal: Math.round(medianK * 1000 * months),
   }
+}
+
+function resolveFactorToMonthlyK(normalizedLower: string, original: string): number {
+  const s = normalizedLower
+  if (s.includes('k')) return 1
+  if (s.includes('元/天') || s.includes('/天')) return 22 / 1000
+  const annual = s.includes('/年') || s.includes('年薪') || (s.includes('万') && s.includes('年') && !s.includes('/月'))
+  if (s.includes('万')) return annual ? 10 / 12 : 10
+  if (s.includes('千')) return 1
+  if (s.includes('元')) return annual ? 1 / 1000 / 12 : 1 / 1000
+
+  const range = s.match(/(\d+(?:\.\d+)?)\s*[-~]+\s*(\d+(?:\.\d+)?)/)
+  if (range) {
+    const sample = Math.max(Number(range[1]), Number(range[2]))
+    if (sample >= 100) return 1 / 1000
+  }
+  if (!original.toLowerCase().includes('k') && !original.includes('千')) {
+    const m = s.match(/(\d+(?:\.\d+)?)/)
+    if (m) {
+      const v = Number(m[1])
+      if (v > 0 && v < 100) return 10
+    }
+  }
+  return 1
+}
+
+/** 将 UI 上的薪资单位数值换算为后端 minK/maxK（月薪 K） */
+export function displaySalaryToMonthlyK(value: number, unit: SalaryDisplayUnit): number {
+  if (unit === 'K') return value
+  if (unit === '万') return value * 10
+  // 万/年 → 月薪 K
+  return (value * 10) / 12
+}
+
+/** 月薪 K → UI 展示数值 */
+export function monthlyKToDisplay(k: number, unit: SalaryDisplayUnit): number {
+  if (unit === 'K') return k
+  if (unit === '万') return k / 10
+  return (k * 12) / 10
+}
+
+export function formatSalaryByUnit(k: number | null | undefined, unit: SalaryDisplayUnit, digits = 1): string {
+  if (k == null || Number.isNaN(k)) return '-'
+  const v = monthlyKToDisplay(k, unit)
+  return `${v.toFixed(digits)}${unit === 'K' ? 'K' : unit}`
 }

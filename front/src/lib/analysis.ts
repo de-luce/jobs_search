@@ -1,4 +1,5 @@
 import type { PlatformId } from './platform'
+import { displaySalaryToMonthlyK, type SalaryDisplayUnit } from './salary'
 
 export type NameValue = { name: string; value: number }
 export type BucketValue = { bucket: string; value: number }
@@ -34,15 +35,21 @@ export type PagedResult<T> = {
   size: number
 }
 
+export type AnalysisFilterOption = { name: string; code?: string }
+
 export type AnalysisFilterState = {
   statuses: string[]
   location: string
   experience: string
   degree: string
+  /** UI 薪资下限（按平台单位：K / 万 / 万/年） */
   minK: string
   maxK: string
   keyword: string
   filterHeadhunter: boolean
+  industry: string
+  scale: string
+  stage: string
 }
 
 export const DEFAULT_FILTER: AnalysisFilterState = {
@@ -54,6 +61,17 @@ export const DEFAULT_FILTER: AnalysisFilterState = {
   maxK: '',
   keyword: '',
   filterHeadhunter: false,
+  industry: '',
+  scale: '',
+  stage: '',
+}
+
+/** 分析页薪资筛选/KPI 展示单位（与各站岗位原文习惯对齐） */
+export const PLATFORM_SALARY_UNIT: Record<PlatformId, SalaryDisplayUnit> = {
+  boss: 'K',
+  '51job': '万',
+  zhilian: '万',
+  liepin: '万/年',
 }
 
 export function buildQuery(params: Record<string, string | undefined | null>) {
@@ -71,16 +89,28 @@ function toOptionalNumberParam(raw?: string): string | undefined {
   return String(n)
 }
 
-export function filterToParams(filter: AnalysisFilterState) {
+/** 将筛选表单转为 API 参数；薪资按平台单位换算为后端月薪 minK/maxK */
+export function filterToParams(filter: AnalysisFilterState, platform?: PlatformId) {
+  const unit = platform ? PLATFORM_SALARY_UNIT[platform] : 'K'
+  const minRaw = toOptionalNumberParam(filter.minK)
+  const maxRaw = toOptionalNumberParam(filter.maxK)
+  const minK =
+    minRaw == null ? undefined : String(displaySalaryToMonthlyK(Number(minRaw), unit))
+  const maxK =
+    maxRaw == null ? undefined : String(displaySalaryToMonthlyK(Number(maxRaw), unit))
+
   return {
     statuses: filter.statuses.length ? filter.statuses.join(',') : undefined,
     location: filter.location || undefined,
     experience: filter.experience || undefined,
     degree: filter.degree || undefined,
-    minK: toOptionalNumberParam(filter.minK),
-    maxK: toOptionalNumberParam(filter.maxK),
+    minK,
+    maxK,
     keyword: filter.keyword || undefined,
     filterHeadhunter: filter.filterHeadhunter ? 'true' : undefined,
+    industry: filter.industry || undefined,
+    scale: filter.scale || undefined,
+    stage: filter.stage || undefined,
   }
 }
 
@@ -106,6 +136,20 @@ export function exportCsv(filename: string, header: string[], rows: string[][]) 
   a.download = filename
   a.click()
   URL.revokeObjectURL(url)
+}
+
+/** 将配置选项转为分析筛选下拉 */
+export function toFilterOptions(
+  list?: Array<{ name?: string; code?: string } | null>
+): AnalysisFilterOption[] {
+  return (list || [])
+    .filter((o): o is { name: string; code?: string } => !!o?.name && o.name !== '不限')
+    .map((o) => ({ name: o.name, code: o.code }))
+}
+
+export function salaryKpiLabel(platform: PlatformId): string {
+  const unit = PLATFORM_SALARY_UNIT[platform]
+  return `均薪(${unit})`
 }
 
 /** 各平台投递分析状态选项 */

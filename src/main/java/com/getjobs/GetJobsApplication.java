@@ -1,5 +1,6 @@
 package com.getjobs;
 
+import com.getjobs.application.init.DatabaseBootstrap;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableAsync;
@@ -17,6 +18,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableAsync
 public class GetJobsApplication {
     public static void main(String[] args) {
+        DatabaseBootstrap.ensureDatabase();
         SpringApplication.run(GetJobsApplication.class, args);
     }
 }

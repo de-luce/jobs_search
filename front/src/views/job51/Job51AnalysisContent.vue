@@ -6,8 +6,7 @@ import AnalysisKpiGrid from '@/components/analysis/AnalysisKpiGrid.vue'
 import AnalysisFilterPanel from '@/components/analysis/AnalysisFilterPanel.vue'
 import AnalysisChartsGrid from '@/components/analysis/AnalysisChartsGrid.vue'
 import AnalysisJobTable, { type TableColumn } from '@/components/analysis/AnalysisJobTable.vue'
-import { formatAvgSalaryK } from '@/lib/analysisKpi'
-import { parseSalary } from '@/lib/salary'
+import { formatSalaryByUnit, parseSalary } from '@/lib/salary'
 import { useAnalysisRealtimeRefresh } from '@/composables/useRealtime'
 import { getApiBase } from '@/lib/platform'
 import {
@@ -17,9 +16,13 @@ import {
   exportCsv,
   PLATFORM_STATUS_OPTIONS,
   PLATFORM_RELOAD,
+  PLATFORM_SALARY_UNIT,
+  toFilterOptions,
+  salaryKpiLabel,
   type StatsResponse,
   type PagedResult,
   type AnalysisFilterState,
+  type AnalysisFilterOption,
 } from '@/lib/analysis'
 import { buildChartConfigs } from '@/lib/chartConfigs'
 import type { KpiItem } from '@/lib/analysisKpi'
@@ -54,8 +57,20 @@ const filter = ref<AnalysisFilterState>({ ...DEFAULT_FILTER })
 const loadingList = ref(false)
 const reloading = ref(false)
 const exporting = ref(false)
+const salaryUnit = PLATFORM_SALARY_UNIT['51job']
+const locationOptions = ref<AnalysisFilterOption[]>([])
 
-const filterParams = computed(() => filterToParams(filter.value))
+const filterParams = computed(() => filterToParams(filter.value, '51job'))
+
+async function loadFilterOptions() {
+  try {
+    const res = await fetch(`${API_BASE}/api/51job/config`)
+    const data = await res.json()
+    locationOptions.value = toFilterOptions(data.options?.jobArea)
+  } catch (e) {
+    console.error('fetch 51job filter options failed', e)
+  }
+}
 
 async function loadStats(opts?: { silent?: boolean }) {
   try {
@@ -88,6 +103,7 @@ function refreshAll() {
 }
 
 onMounted(() => {
+  void loadFilterOptions()
   void loadList(1, size.value)
   void loadStats()
 })
@@ -149,7 +165,7 @@ const totalPages = computed(() => Math.max(1, Math.ceil(total.value / size.value
 
 const avgSalaryDisplay = computed(() => {
   if (kpi.value?.avgMonthlyK != null && kpi.value.avgMonthlyK > 0) {
-    return formatAvgSalaryK(kpi.value.avgMonthlyK)
+    return formatSalaryByUnit(kpi.value.avgMonthlyK, salaryUnit)
   }
   const ks: number[] = []
   for (const it of items.value) {
@@ -157,7 +173,7 @@ const avgSalaryDisplay = computed(() => {
     if (info && !Number.isNaN(info.medianK)) ks.push(info.medianK)
   }
   if (!ks.length) return '—'
-  return formatAvgSalaryK(ks.reduce((a, b) => a + b, 0) / ks.length)
+  return formatSalaryByUnit(ks.reduce((a, b) => a + b, 0) / ks.length, salaryUnit)
 })
 
 const kpiItems = computed<KpiItem[]>(() => [
@@ -165,7 +181,7 @@ const kpiItems = computed<KpiItem[]>(() => [
   { label: '已投递', value: kpi.value?.delivered ?? 0, highlight: 'delivered' },
   { label: '未投递', value: kpi.value?.pending ?? 0, highlight: 'pending' },
   { label: '已过滤', value: kpi.value?.filtered ?? 0, highlight: 'filtered' },
-  { label: '均薪(K)', value: avgSalaryDisplay.value, highlight: 'salary' },
+  { label: salaryKpiLabel('51job'), value: avgSalaryDisplay.value, highlight: 'salary' },
 ])
 
 const chartConfigs = computed(() => {
@@ -208,6 +224,8 @@ function onFilterChange(patch: Partial<AnalysisFilterState>) {
       :loading-list="loadingList"
       :reloading="reloading"
       :exporting="exporting"
+      :salary-unit="salaryUnit"
+      :location-options="locationOptions"
       @update:filter="onFilterChange"
       @apply="applyFilters"
       @reload="onReload"

@@ -7,6 +7,7 @@ import com.getjobs.application.mapper.LiepinConfigMapper;
 import com.getjobs.application.mapper.LiepinOptionMapper;
 import com.getjobs.application.mapper.LiepinMapper;
 import com.getjobs.application.utils.DeliveryStatuses;
+import com.getjobs.application.utils.SalaryParseUtil;
 import com.mybatisflex.core.query.QueryChain;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -434,36 +435,16 @@ public class LiepinService {
         public Long annualTotal;
     }
 
-    /** 解析薪资文本为区间与中位数K（支持“面议”“X-Yk·N薪”等） */
+    /** 解析薪资文本为区间与中位数K（统一换算：K / 万 / 年薪万） */
     public static SalaryInfo parseSalary(String salaryText) {
-        if (salaryText == null) return null;
-        String s = salaryText.trim();
-        if (s.isEmpty()) return null;
-        if (s.contains("面议")) return null;
-
-        Integer months = null;
-        java.util.regex.Matcher mMonths = java.util.regex.Pattern.compile("([0-9]{1,2})[\u00B7\u00D7xX*]?(?:薪|月)").matcher(s);
-        if (mMonths.find()) {
-            try { months = Integer.parseInt(mMonths.group(1)); } catch (Exception ignored) {}
-        }
-
-        String cleaned = s.replaceAll("[·\u00B7\u00D7xX*].*$", "");
-        Integer minK = null, maxK = null;
-        java.util.regex.Matcher mRange = java.util.regex.Pattern.compile("(\\d+)[Kk].*?(\\d+)[Kk]").matcher(cleaned);
-        java.util.regex.Matcher mSingle = java.util.regex.Pattern.compile("^(\\d+)[Kk]$").matcher(cleaned);
-        if (mRange.find()) {
-            try { minK = Integer.parseInt(mRange.group(1)); maxK = Integer.parseInt(mRange.group(2)); } catch (Exception ignored) {}
-        } else if (mSingle.find()) {
-            try { minK = Integer.parseInt(mSingle.group(1)); maxK = minK; } catch (Exception ignored) {}
-        }
-
-        if (minK == null || maxK == null) return null;
+        SalaryParseUtil.SalaryInfo parsed = SalaryParseUtil.parse(salaryText);
+        if (parsed == null || parsed.medianK == null) return null;
         SalaryInfo info = new SalaryInfo();
-        info.minK = minK;
-        info.maxK = maxK;
-        info.months = months != null ? months : 12;
-        info.medianK = (minK + maxK) / 2.0;
-        info.annualTotal = Math.round(info.medianK * 1000 * info.months);
+        info.minK = parsed.minK == null ? null : (int) Math.round(parsed.minK);
+        info.maxK = parsed.maxK == null ? null : (int) Math.round(parsed.maxK);
+        info.months = parsed.months != null ? parsed.months : 12;
+        info.medianK = parsed.medianK;
+        info.annualTotal = parsed.annualTotal;
         return info;
     }
 
@@ -515,7 +496,9 @@ public class LiepinService {
             String degree,
             Double minK,
             Double maxK,
-            String keyword
+            String keyword,
+            String industry,
+            String scale
     ) {
         StatsResponse resp = new StatsResponse();
         resp.kpi = new Kpi();
@@ -544,9 +527,11 @@ public class LiepinService {
                     wrapper.where(LIEPIN.DELIVERY_STATUS.in(statusSet));
                 }
             }
-            if (location != null && !location.trim().isEmpty()) wrapper.and(LIEPIN.JOB_AREA.eq(location.trim()));
+            if (location != null && !location.trim().isEmpty()) wrapper.and(LIEPIN.JOB_AREA.like(location.trim()));
             if (experience != null && !experience.trim().isEmpty()) wrapper.and(LIEPIN.JOB_EXP_REQ.eq(experience.trim()));
             if (degree != null && !degree.trim().isEmpty()) wrapper.and(LIEPIN.JOB_EDU_REQ.eq(degree.trim()));
+            if (industry != null && !industry.trim().isEmpty()) wrapper.and(LIEPIN.COMP_INDUSTRY.like(industry.trim()));
+            if (scale != null && !scale.trim().isEmpty()) wrapper.and(LIEPIN.COMP_SCALE.eq(scale.trim()));
 
             if (keyword != null && !keyword.trim().isEmpty()) {
                 String kw = keyword.trim();
@@ -683,7 +668,9 @@ public class LiepinService {
             Double maxK,
             String keyword,
             int page,
-            int size
+            int size,
+            String industry,
+            String scale
     ) {
         if (page <= 0) page = 1;
         if (size <= 0) size = 20;
@@ -698,9 +685,11 @@ public class LiepinService {
                     .collect(Collectors.toSet());
             if (!statusSet.isEmpty()) wrapper.where(LIEPIN.DELIVERY_STATUS.in(statusSet));
         }
-        if (location != null && !location.trim().isEmpty()) wrapper.and(LIEPIN.JOB_AREA.eq(location.trim()));
+        if (location != null && !location.trim().isEmpty()) wrapper.and(LIEPIN.JOB_AREA.like(location.trim()));
         if (experience != null && !experience.trim().isEmpty()) wrapper.and(LIEPIN.JOB_EXP_REQ.eq(experience.trim()));
         if (degree != null && !degree.trim().isEmpty()) wrapper.and(LIEPIN.JOB_EDU_REQ.eq(degree.trim()));
+        if (industry != null && !industry.trim().isEmpty()) wrapper.and(LIEPIN.COMP_INDUSTRY.like(industry.trim()));
+        if (scale != null && !scale.trim().isEmpty()) wrapper.and(LIEPIN.COMP_SCALE.eq(scale.trim()));
 
         if (keyword != null && !keyword.trim().isEmpty()) {
             String kw = keyword.trim();

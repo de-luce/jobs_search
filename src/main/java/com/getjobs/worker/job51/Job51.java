@@ -246,7 +246,7 @@ public class Job51 {
                 }
             } catch (Exception e) { /* 静默 */ }
 
-            // 遍历页面投递
+            // 遍历页面投递：先投当前页，再点「下一页」，不再依赖 #jump_page 跳页
             for (int pageNum = 1; pageNum <= DEFAULT_MAX_PAGE; pageNum++) {
                 if (shouldStop()) {
                     sendProgress("用户取消投递", null, null);
@@ -256,12 +256,7 @@ public class Job51 {
                 sendProgress(String.format("正在投递第%d页", pageNum), pageNum, DEFAULT_MAX_PAGE);
                 currentPageNum = pageNum;
 
-                // 跳转到指定页码
-                if (pageNum > 1 && !jumpToPage(pageNum)) {
-                    break;
-                }
-
-                PlaywrightUtil.sleep(2);
+                PlaywrightUtil.sleep(1);
 
                 // 检查是否出现访问验证
                 if (checkAccessVerification()) {
@@ -279,15 +274,22 @@ public class Job51 {
 
                 // 投递当前页面的所有职位
                 int deliveredOnPage = deliverCurrentPage();
-                if (deliveredOnPage == 0) {
-                    if (pageNum == 1) {
-                        sendProgress("当前页未找到可投递岗位，请确认已登录且搜索结果已正常显示", null, null);
-                    }
+                if (deliveredOnPage == 0 && pageNum == 1) {
+                    sendProgress("当前页未找到可投递岗位，请确认已登录且搜索结果已正常显示", null, null);
+                }
+                if (reachedDailyLimit) {
                     break;
                 }
-                if (reachedDailyLimit) break;
 
-                PlaywrightUtil.sleep(3);
+                if (pageNum >= DEFAULT_MAX_PAGE) {
+                    break;
+                }
+                if (!goToNextPage()) {
+                    log.info("[51job] 无法继续翻页，结束当前关键词");
+                    sendProgress("已到最后一页或找不到下一页", pageNum, DEFAULT_MAX_PAGE);
+                    break;
+                }
+                PlaywrightUtil.sleep(2);
             }
 
             // 关键词完成不输出日志
@@ -315,6 +317,24 @@ public class Job51 {
             Locator companies = findJobCompanies();
             int selectedCount = 0;
             java.util.List<Long> filteredIds = new java.util.ArrayList<>();
+            java.util.List<Long> selectedIds = new java.util.ArrayList<>();
+
+            // 若接口缓存的 jobId 为空，尝试从 DOM 补采
+            List<Long> pageJobIds;
+            synchronized (currentPageJobIds) {
+                pageJobIds = new ArrayList<>(currentPageJobIds);
+            }
+            if (pageJobIds.isEmpty()) {
+                try {
+                    pageJobIds = collectJobIdsOnPage();
+                    if (pageJobIds != null && !pageJobIds.isEmpty()) {
+                        synchronized (currentPageJobIds) {
+                            currentPageJobIds.clear();
+                            currentPageJobIds.addAll(pageJobIds);
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
 
             // 选中未命中黑名单的职位
             for (int i = 0; i < jobCount; i++) {
@@ -325,13 +345,12 @@ public class Job51 {
                 try {
                     String title = i < titles.count() ? titles.nth(i).textContent() : "未知职位";
                     String company = i < companies.count() ? companies.nth(i).textContent() : "未知公司";
+                    Long jobId = (i < pageJobIds.size()) ? pageJobIds.get(i) : null;
                     String matchedBlacklist = blacklistService.findMatchedCompany(company);
                     if (matchedBlacklist != null) {
                         log.info("被过滤：公司名命中全局黑名单「{}」 | 公司：{} | 岗位：{}", matchedBlacklist, company, title);
-                        synchronized (currentPageJobIds) {
-                            if (i < currentPageJobIds.size()) {
-                                filteredIds.add(currentPageJobIds.get(i));
-                            }
+                        if (jobId != null) {
+                            filteredIds.add(jobId);
                         }
                         continue;
                     }
@@ -340,10 +359,12 @@ public class Job51 {
                     // 使用JavaScript点击，避免元素被遮挡
                     checkbox.evaluate("el => el.click()");
                     selectedCount++;
+                    if (jobId != null) {
+                        selectedIds.add(jobId);
+                    }
 
                     String jobInfo = company + " | " + title;
                     resultList.add(jobInfo);
-//                    log.info("选中: {}", jobInfo);
                 } catch (Exception e) { /* 静默 */ }
             }
 
@@ -358,19 +379,23 @@ public class Job51 {
 
             PlaywrightUtil.sleep(1);
 
-            // 滚动到页面顶部
-            page.evaluate("window.scrollTo(0, 0)");
-            PlaywrightUtil.sleep(1);
+            // 「一键投递」在列表上方工具栏：勾选后常停在底部，需先滚上去才看得见
+            ensureDeliverToolbarVisible();
 
             // 点击批量投递按钮
-            clickBatchDeliverButton();
+            if (!clickBatchDeliverButton()) {
+                log.warn("[51job] 已勾选 {} 个岗位，但未找到/未点到批量投递按钮", selectedCount);
+                sendProgress("已勾选岗位但未点到投递按钮，请检查页面是否变更", null, null);
+                dumpVisibleActionButtons();
+                return 0;
+            }
 
             PlaywrightUtil.sleep(2);
 
-            // 处理投递成功弹窗，并确保遮罩层完全关闭，避免影响翻页/下一轮勾选
-            handleDeliverySuccessDialog();
+            // 批量投递后通常只有一个结果弹窗：解析 → 更新状态 → 关闭
+            handleDeliverySuccessDialog(selectedIds);
             handleSeparateDeliveryDialog();
-            dismissDeliveryDialogs(5);
+            dismissDeliveryDialogs(3);
 
             return selectedCount;
 
@@ -511,59 +536,227 @@ public class Job51 {
     }
 
     /**
-     * 点击批量投递按钮
+     * 「一键投递」在列表上方 tabs 工具栏。滑到页面底部时会滚出视口，需先滚上去再点击。
      */
-    private void clickBatchDeliverButton() {
-        int retryCount = 0;
-        boolean success = false;
+    private void ensureDeliverToolbarVisible() {
+        try {
+            page.evaluate("""
+                (() => {
+                  window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+                  document.documentElement.scrollTop = 0;
+                  document.body.scrollTop = 0;
+                  // 滚动常见列表容器
+                  document.querySelectorAll('.j_joblist, .joblist, [class*="joblist"], .content, main')
+                    .forEach(el => { try { el.scrollTop = 0; } catch (e) {} });
+                  // 若存在「一键投递/批量投递」按钮，滚到视口中部（即使原先在视口外）
+                  const keywords = ['一键投递', '批量投递', '申请职位', '投递简历'];
+                  const nodes = Array.from(document.querySelectorAll('button, a, .p_but, [class*="p_but"]'));
+                  const target = nodes.find(el => {
+                    const t = (el.innerText || el.textContent || '').replace(/\\s+/g, '');
+                    return keywords.some(k => t.includes(k));
+                  });
+                  if (target) {
+                    target.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'nearest' });
+                  } else {
+                    const bar = document.querySelector('div.tabs_in, .tabs_in, [class*="batch"], [class*="apply"]');
+                    if (bar) bar.scrollIntoView({ behavior: 'instant', block: 'center' });
+                  }
+                })()
+                """);
+        } catch (Exception e) {
+            log.debug("[51job] 滚回投递工具栏失败: {}", e.getMessage());
+            try { page.evaluate("window.scrollTo(0, 0)"); } catch (Exception ignored) {}
+        }
+        PlaywrightUtil.sleepMillis(500);
+    }
 
-        while (!success && retryCount < 5) {
-            try {
-                if (shouldStop()) {
-                    return;
-                }
+    /**
+     * 点击批量投递按钮。选择器会随站点改版变化，按文案多兜底。
+     * @return 是否成功点击
+     */
+    private boolean clickBatchDeliverButton() {
+        String[] candidates = {
+                "button:has-text(\"一键投递\")",
+                "button.p_but:has-text(\"一键投递\")",
+                "div.tabs_in button.p_but:has-text(\"一键投递\")",
+                "button:has-text(\"批量投递\")",
+                "button:has-text(\"申请职位\")",
+                "button:has-text(\"投递简历\")",
+                "a:has-text(\"批量投递\")",
+                "div.tabs_in button.p_but:has-text(\"投递\")",
+                "div.tabs_in button.p_but:has-text(\"申请\")",
+                "button.p_but:has-text(\"投递\")",
+                "button.p_but:has-text(\"申请\")",
+                "[class*='apply'] button:has-text(\"投递\")",
+                "[class*='apply'] button:has-text(\"申请\")",
+                "button.el-button--primary:has-text(\"投递\")",
+                "button.el-button--primary:has-text(\"申请\")"
+        };
 
-                // 查找批量投递按钮
-                Locator parent = page.locator("div.tabs_in");
-                Locator buttons = parent.locator("button.p_but");
+        for (int retry = 0; retry < 5; retry++) {
+            if (shouldStop()) {
+                return false;
+            }
+            ensureDeliverToolbarVisible();
 
-                if (buttons.count() > 1) {
-                    PlaywrightUtil.sleep(1);
-                    buttons.nth(1).click();
-                    
-                    // 🚨 点击后立即检测“日投递上限”提示（短暂出现，需快速多次检测）
+            for (String sel : candidates) {
+                try {
+                    Locator btn = page.locator(sel);
+                    int n = btn.count();
+                    if (n == 0) {
+                        continue;
+                    }
+                    Locator target = btn.first();
+                    String text = "";
+                    try {
+                        text = target.innerText();
+                    } catch (Exception ignored) {}
+                    // 排除明显不是投递的按钮
+                    if (text != null && (text.contains("搜索") || text.contains("登录") || text.contains("注册"))) {
+                        continue;
+                    }
+                    // 不因暂不在视口而跳过：先滚入视野再点（滑到底时原先 isVisible=false 会误跳过）
+                    try {
+                        target.scrollIntoViewIfNeeded();
+                    } catch (Exception ignored) {}
+                    PlaywrightUtil.sleepMillis(300);
+                    try {
+                        target.click(new Locator.ClickOptions().setTimeout(3000));
+                    } catch (Exception clickEx) {
+                        try {
+                            target.click(new Locator.ClickOptions().setForce(true).setTimeout(3000));
+                        } catch (Exception forceEx) {
+                            target.evaluate("el => el.click()");
+                        }
+                    }
+                    log.info("[51job] 已点击批量投递按钮: sel={} text={}", sel, text == null ? "" : text.trim());
+                    sendProgress("已点击批量投递按钮", null, null);
+
                     for (int i = 0; i < 10; i++) {
-                        try { Thread.sleep(200); } catch (InterruptedException ignored) {} // 每200ms检测一次
+                        try { Thread.sleep(200); } catch (InterruptedException ignored) {}
                         if (detectDailyLimitToast51job()) {
                             reachedDailyLimit = true;
                             log.warn("点击投递按钮后，检测到 51job 日投递上限提示，停止投递");
                             sendProgress("检测到日投递上限，任务已停止", null, null);
-                            return;
+                            return true;
                         }
                     }
-                    
-                    success = true;
-                } else {
-                    break;
+                    return true;
+                } catch (Exception ignored) {}
+            }
+
+            // JS 兜底：优先找「一键投递」，不在视口也先 scrollIntoView 再点
+            try {
+                Object clicked = page.evaluate("""
+                    (() => {
+                      const keywords = ['一键投递', '批量投递', '申请职位', '投递简历', '立即投递'];
+                      const soft = ['投递', '申请'];
+                      const nodes = Array.from(document.querySelectorAll('button, a, span, div.p_but, button.p_but'));
+                      const present = (el) => {
+                        const s = getComputedStyle(el);
+                        const r = el.getBoundingClientRect();
+                        return s.visibility !== 'hidden' && s.display !== 'none'
+                          && r.width > 0 && r.height > 0;
+                      };
+                      const pick = (list) => list.find(el => {
+                        if (!present(el)) return false;
+                        const t = (el.innerText || el.textContent || '').replace(/\\s+/g, '');
+                        if (!t || t.length > 12) return false;
+                        return keywords.some(k => t.includes(k));
+                      });
+                      let target = pick(nodes);
+                      if (!target) {
+                        target = nodes.find(el => {
+                          if (!present(el)) return false;
+                          const t = (el.innerText || el.textContent || '').replace(/\\s+/g, '');
+                          if (!t || t.length > 8) return false;
+                          if (t.includes('搜索') || t.includes('登录')) return false;
+                          return soft.some(k => t === k || t.startsWith(k));
+                        });
+                      }
+                      if (!target) return null;
+                      target.scrollIntoView({ behavior: 'instant', block: 'center' });
+                      target.click();
+                      return (target.innerText || target.textContent || '').trim();
+                    })()
+                    """);
+                if (clicked instanceof String && !((String) clicked).isBlank()) {
+                    log.info("[51job] JS 兜底已点击投递按钮: {}", clicked);
+                    sendProgress("已点击批量投递按钮", null, null);
+                    for (int i = 0; i < 10; i++) {
+                        try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+                        if (detectDailyLimitToast51job()) {
+                            reachedDailyLimit = true;
+                            log.warn("点击投递按钮后，检测到 51job 日投递上限提示，停止投递");
+                            sendProgress("检测到日投递上限，任务已停止", null, null);
+                            return true;
+                        }
+                    }
+                    return true;
                 }
             } catch (Exception e) {
-                retryCount++;
-                PlaywrightUtil.sleep(1);
+                log.debug("[51job] JS 兜底点击失败: {}", e.getMessage());
             }
+
+            // 兼容旧选择器：tabs_in 下第 2 个 p_but
+            try {
+                Locator parent = page.locator("div.tabs_in");
+                Locator buttons = parent.locator("button.p_but");
+                if (buttons.count() > 1) {
+                    Locator target = buttons.nth(1);
+                    String text = "";
+                    try { text = target.innerText(); } catch (Exception ignored) {}
+                    try { target.scrollIntoViewIfNeeded(); } catch (Exception ignored) {}
+                    target.click(new Locator.ClickOptions().setForce(true).setTimeout(3000));
+                    log.info("[51job] 旧选择器已点击批量投递: text={}", text == null ? "" : text.trim());
+                    return true;
+                }
+            } catch (Exception ignored) {}
+
+            log.warn("[51job] 第 {} 次未找到批量投递按钮，重试…", retry + 1);
+            PlaywrightUtil.sleep(1);
+        }
+        return false;
+    }
+
+    private void dumpVisibleActionButtons() {
+        try {
+            Object info = page.evaluate("""
+                (() => {
+                  const nodes = Array.from(document.querySelectorAll('button, a.el-button, [class*="p_but"], [class*="apply"]'));
+                  return nodes.slice(0, 30).map(el => {
+                    const t = (el.innerText || '').replace(/\\s+/g, ' ').trim();
+                    return {tag: el.tagName, class: el.className, text: t.slice(0, 40)};
+                  }).filter(x => x.text);
+                })()
+                """);
+            log.warn("[51job] 页面可见操作按钮快照: {}", info);
+        } catch (Exception e) {
+            log.debug("[51job] 导出按钮快照失败: {}", e.getMessage());
         }
     }
 
     /**
-     * 处理投递成功弹窗：记录结果 → 关闭弹窗/遮罩，避免影响后续勾选与翻页
+     * 处理批量投递后的唯一结果弹窗：解析结果 → 标记已投递 → 关闭弹窗。
+     * 批量投递通常只有一个弹窗，不依赖「投递成功N个」文案才能更新状态。
      */
-    private void handleDeliverySuccessDialog() {
+    private void handleDeliverySuccessDialog(List<Long> selectedIds) {
+        String dialogText = null;
+        boolean sawDialog = false;
         try {
             // 弹窗可能延迟出现，短暂轮询
-            for (int i = 0; i < 10; i++) {
+            for (int i = 0; i < 12; i++) {
                 if (shouldStop()) {
                     return;
                 }
+                dialogText = readDeliveryDialogText();
+                if (dialogText != null && !dialogText.isBlank()) {
+                    sawDialog = true;
+                    break;
+                }
                 if (hasVisibleDeliveryDialog()) {
+                    sawDialog = true;
+                    dialogText = readDeliveryDialogText();
                     break;
                 }
                 PlaywrightUtil.sleepMillis(300);
@@ -583,51 +776,37 @@ public class Job51 {
                 }
             }
 
-            // 兼容提示弹框：投递成功N个，未投递M个
-            Locator elDialogBody = page.locator(".el-dialog__body, .el-message-box__message, .el-message-box__content");
-            if (elDialogBody.count() > 0) {
-                String dialogText = null;
+            Integer successNum = null;
+            Integer failNum = null;
+            if (dialogText != null && !dialogText.isBlank()) {
                 try {
-                    dialogText = elDialogBody.first().innerText();
+                    java.util.regex.Matcher m1 = java.util.regex.Pattern
+                            .compile("投递成功\\D*(\\d+)").matcher(dialogText);
+                    if (m1.find()) {
+                        successNum = Integer.parseInt(m1.group(1));
+                    }
+                    java.util.regex.Matcher m2 = java.util.regex.Pattern
+                            .compile("未投递\\D*(\\d+)").matcher(dialogText);
+                    if (m2.find()) {
+                        failNum = Integer.parseInt(m2.group(1));
+                    }
                 } catch (Exception ignored) {}
-                if (dialogText != null && (dialogText.contains("投递成功") || dialogText.contains("投递完成"))) {
-                    Integer successNum = null;
-                    Integer failNum = null;
-                    try {
-                        java.util.regex.Matcher m1 = java.util.regex.Pattern.compile("投递成功\\D*(\\d+)").matcher(dialogText);
-                        if (m1.find()) successNum = Integer.parseInt(m1.group(1));
-                        java.util.regex.Matcher m2 = java.util.regex.Pattern.compile("未投递\\D*(\\d+)").matcher(dialogText);
-                        if (m2.find()) failNum = Integer.parseInt(m2.group(1));
-                    } catch (Exception ignored) {}
-                    log.info("[51job] 投递结果：成功 {} 个，未投递 {} 个", successNum, failNum);
+                log.info("[51job] 投递结果弹窗：成功 {} 个，未投递 {} 个 | text={}",
+                        successNum, failNum,
+                        dialogText.length() > 80 ? dialogText.substring(0, 80) + "…" : dialogText);
+                if (successNum != null || failNum != null
+                        || dialogText.contains("投递成功") || dialogText.contains("投递完成")
+                        || dialogText.contains("申请成功")) {
                     sendProgress(String.format("投递结果：成功 %s 个，未投递 %s 个",
                             successNum == null ? "?" : successNum,
                             failNum == null ? "?" : failNum), null, null);
-
-                    if (successNum != null && successNum > 0) {
-                        try {
-                            List<Long> deliveredIds = new ArrayList<>();
-                            synchronized (currentPageJobIds) {
-                                deliveredIds.addAll(currentPageJobIds);
-                            }
-                            if (!deliveredIds.isEmpty()) {
-                                int markCount = Math.min(successNum, deliveredIds.size());
-                                List<Long> toMark = deliveredIds.subList(0, markCount);
-                                job51Service.markDeliveredBatch(toMark);
-                                log.info("[51job] 标记已投递 {} 个职位", toMark.size());
-                            } else {
-                                log.warn("[51job] 当前页没有缓存的jobId，无法标记投递状态");
-                            }
-                        } catch (Exception e) {
-                            log.warn("[51job] 标记投递状态失败: {}", e.getMessage());
-                        }
-                    } else {
-                        log.warn("[51job] 投递成功数量为0或未解析到，不标记投递状态");
-                    }
                 }
             }
 
-            dismissDeliveryDialogs(5);
+            // 批量投递成功后：按勾选岗位更新已投递（弹窗只有一个，文案解析失败也要更新）
+            markSelectedJobsDelivered(selectedIds, successNum, true);
+
+            dismissDeliveryDialogs(3);
 
             try {
                 if (detectDailyLimitToast51job()) {
@@ -636,8 +815,54 @@ public class Job51 {
                 }
             } catch (Exception ignored) {}
         } catch (Exception e) {
-            log.debug("未找到投递成功弹窗或处理失败: {}", e.getMessage());
+            log.debug("处理投递结果弹窗失败: {}", e.getMessage());
+            markSelectedJobsDelivered(selectedIds, null, true);
             dismissDeliveryDialogs(3);
+        }
+    }
+
+    private String readDeliveryDialogText() {
+        String[] selectors = {
+                ".el-dialog__body",
+                ".el-message-box__message",
+                ".el-message-box__content",
+                ".el-dialog",
+                ".successContent"
+        };
+        for (String sel : selectors) {
+            try {
+                Locator loc = page.locator(sel);
+                if (loc.count() == 0) {
+                    continue;
+                }
+                String text = loc.first().innerText();
+                if (text != null && !text.isBlank()) {
+                    return text.trim();
+                }
+            } catch (Exception ignored) {}
+        }
+        return null;
+    }
+
+    private void markSelectedJobsDelivered(List<Long> selectedIds, Integer successNum, boolean deliveredLikely) {
+        if (selectedIds == null || selectedIds.isEmpty()) {
+            log.warn("[51job] 本轮无可标记的 jobId（勾选列表为空），无法更新投递状态");
+            return;
+        }
+        if (!deliveredLikely && (successNum == null || successNum <= 0)) {
+            log.warn("[51job] 未检测到投递结果，暂不标记已投递");
+            return;
+        }
+        try {
+            List<Long> toMark = selectedIds;
+            if (successNum != null && successNum > 0 && successNum < selectedIds.size()) {
+                toMark = selectedIds.subList(0, successNum);
+            }
+            job51Service.markDeliveredBatch(toMark);
+            log.info("[51job] 已更新投递状态：标记 {} 个为已投递", toMark.size());
+            sendProgress(String.format("已更新 %d 个岗位为已投递", toMark.size()), null, null);
+        } catch (Exception e) {
+            log.warn("[51job] 标记已投递失败: {}", e.getMessage());
         }
     }
 
@@ -769,7 +994,128 @@ public class Job51 {
     }
 
     /**
-     * 跳转到指定页码
+     * 翻到下一页。优先点「下一页」，失败再尝试页码输入跳转。
+     */
+    private boolean goToNextPage() {
+        dismissDeliveryDialogs(2);
+        resetSearchApiFuture();
+
+        // 1) 下一页按钮
+        String[] nextSelectors = {
+                "button:has-text(\"下一页\")",
+                "a:has-text(\"下一页\")",
+                "li.btn-next:not(.disabled)",
+                "button.btn-next:not(.disabled)",
+                ".el-pagination .btn-next:not(.disabled)",
+                ".el-pager + button.btn-next",
+                "span.next:not(.disabled)",
+                "a.next:not(.disabled)",
+                "[class*='next']:not([class*='disabled']):has-text(\"下一页\")",
+                "[aria-label='下一页']",
+                "[aria-label='Next']"
+        };
+        for (String sel : nextSelectors) {
+            try {
+                Locator next = page.locator(sel);
+                if (next.count() == 0) {
+                    continue;
+                }
+                Locator first = next.first();
+                String cls = "";
+                try { cls = first.getAttribute("class"); } catch (Exception ignored) {}
+                if (cls != null && (cls.contains("disabled") || cls.contains("is-disabled"))) {
+                    log.info("[51job] 下一页按钮不可用: {}", sel);
+                    return false;
+                }
+                if (!first.isVisible()) {
+                    continue;
+                }
+                first.scrollIntoViewIfNeeded();
+                first.click(new Locator.ClickOptions().setTimeout(3000));
+                log.info("[51job] 已点击下一页: {}", sel);
+                return waitAfterPageChange();
+            } catch (Exception ignored) {}
+        }
+
+        // 2) 通过页码输入框跳到下一页
+        try {
+            Locator pageInput = page.locator("#jump_page, input.jumpPage, .jumpPage input, input[type='number']");
+            if (pageInput.count() > 0 && pageInput.first().isVisible()) {
+                int target = currentPageNum + 1;
+                Locator input = pageInput.first();
+                input.click();
+                input.fill(String.valueOf(target));
+                Locator jumpBtn = page.locator("span.jumpPage, button:has-text('确定'), .jump-btn");
+                if (jumpBtn.count() > 0) {
+                    jumpBtn.first().click();
+                } else {
+                    input.press("Enter");
+                }
+                log.info("[51job] 通过页码输入跳到第{}页", target);
+                return waitAfterPageChange();
+            }
+        } catch (Exception e) {
+            log.debug("[51job] 页码跳转失败: {}", e.getMessage());
+        }
+
+        // 3) JS 兜底找下一页
+        try {
+            Object clicked = page.evaluate("""
+                (() => {
+                  const candidates = Array.from(document.querySelectorAll('button,a,li,span'));
+                  const next = candidates.find(el => {
+                    const t = (el.innerText || '').replace(/\\s+/g, '');
+                    const cls = (el.className || '').toString();
+                    if (cls.includes('disabled') || cls.includes('is-disabled')) return false;
+                    return t === '下一页' || t === '下页' || t === '>';
+                  });
+                  if (!next) return false;
+                  next.click();
+                  return true;
+                })()
+                """);
+            if (Boolean.TRUE.equals(clicked)) {
+                log.info("[51job] JS 兜底已点击下一页");
+                return waitAfterPageChange();
+            }
+        } catch (Exception ignored) {}
+
+        log.warn("[51job] 未找到可用的下一页控件");
+        return false;
+    }
+
+    private boolean waitAfterPageChange() {
+        PlaywrightUtil.sleep(2);
+        CompletableFuture<Integer> apiFuture = searchApiFuture;
+        if (apiFuture != null) {
+            long deadline = System.currentTimeMillis() + 12_000;
+            while (System.currentTimeMillis() < deadline) {
+                if (shouldStop()) {
+                    return false;
+                }
+                if (apiFuture.isDone()) {
+                    try {
+                        Integer count = apiFuture.get(0, TimeUnit.SECONDS);
+                        lastSearchApiJobCount = count != null ? count : 0;
+                        log.info("[51job] 翻页后搜索接口返回 {} 个岗位", lastSearchApiJobCount);
+                    } catch (Exception ignored) {}
+                    break;
+                }
+                PlaywrightUtil.sleepMillis(200);
+            }
+        }
+        try {
+            page.waitForSelector("div.ick, [class*='jname'], a[href*='jobdetail']",
+                    new Page.WaitForSelectorOptions().setTimeout(8000));
+            return true;
+        } catch (Exception e) {
+            log.warn("[51job] 翻页后岗位列表未就绪: {}", e.getMessage());
+            return findJobCheckboxes().count() > 0;
+        }
+    }
+
+    /**
+     * @deprecated 保留旧跳页方法供排查，实际流程改用 {@link #goToNextPage()}
      */
     private boolean jumpToPage(int pageNum) {
         for (int retry = 0; retry < 3; retry++) {
@@ -777,38 +1123,27 @@ public class Job51 {
                 if (shouldStop()) {
                     return false;
                 }
-
-                // 跳页前先关闭可能遮挡操作的弹框
                 dismissDeliveryDialogs(3);
-
                 Locator pageInput = page.locator("#jump_page");
                 if (pageInput.count() == 0) {
                     log.warn("未找到页码输入框");
                     return false;
                 }
-
                 PlaywrightUtil.sleep(1);
                 pageInput.click();
                 pageInput.fill("");
                 pageInput.fill(String.valueOf(pageNum));
-
-                // 点击跳转按钮
-                Locator jumpButton = page.locator("#app > div > div.post > div > div > div.j_result > div > div:nth-child(2) > div > div.bottom-page > div > div > span.jumpPage");
+                Locator jumpButton = page.locator("span.jumpPage, .jumpPage");
                 if (jumpButton.count() > 0) {
-                    jumpButton.click();
+                    jumpButton.first().click();
                 }
-
-                // 滚动到页面顶部
                 page.evaluate("window.scrollTo(0, 0)");
                 PlaywrightUtil.sleep(2);
-
                 log.info("成功跳转到第{}页", pageNum);
                 return true;
             } catch (Exception e) {
                 log.warn("跳转到第{}页失败，重试第{}次: {}", pageNum, retry + 1, e.getMessage());
                 PlaywrightUtil.sleep(1);
-
-                // 检查是否出现异常，如果出现则刷新页面
                 if (checkAccessVerification()) {
                     return false;
                 }

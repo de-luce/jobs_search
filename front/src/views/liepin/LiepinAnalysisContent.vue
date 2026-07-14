@@ -15,14 +15,18 @@ import {
   PLATFORM_HEADHUNTER_FILTER,
   PLATFORM_RELOAD,
   PLATFORM_STATUS_OPTIONS,
+  PLATFORM_SALARY_UNIT,
+  toFilterOptions,
+  salaryKpiLabel,
   type AnalysisFilterState,
+  type AnalysisFilterOption,
   type PagedResult,
   type StatsResponse,
 } from '@/lib/analysis'
 import { buildChartConfigs } from '@/lib/chartConfigs'
-import { formatAvgSalaryK, deliveryStatusClass, type KpiItem } from '@/lib/analysisKpi'
+import { deliveryStatusClass, type KpiItem } from '@/lib/analysisKpi'
 import { getApiBase } from '@/lib/platform'
-import { parseSalary } from '@/lib/salary'
+import { formatSalaryByUnit, parseSalary } from '@/lib/salary'
 import { useAnalysisRealtimeRefresh } from '@/composables/useRealtime'
 
 type LiepinJob = {
@@ -59,8 +63,27 @@ const filter = ref<AnalysisFilterState>({ ...DEFAULT_FILTER })
 const loadingList = ref(false)
 const exporting = ref(false)
 const detailJob = ref<LiepinJob | null>(null)
+const salaryUnit = PLATFORM_SALARY_UNIT.liepin
+const locationOptions = ref<AnalysisFilterOption[]>([])
+const experienceOptions = ref<AnalysisFilterOption[]>([])
+const degreeOptions = ref<AnalysisFilterOption[]>([])
+const scaleOptions = ref<AnalysisFilterOption[]>([])
 
-const filterParams = computed(() => filterToParams(filter.value))
+const filterParams = computed(() => filterToParams(filter.value, 'liepin'))
+
+async function loadFilterOptions() {
+  try {
+    const res = await fetch(`${API}/api/liepin/config`)
+    const data = await res.json()
+    const opts = data.options || {}
+    locationOptions.value = toFilterOptions(opts.city)
+    experienceOptions.value = toFilterOptions(opts.experience)
+    degreeOptions.value = toFilterOptions(opts.degree)
+    scaleOptions.value = toFilterOptions(opts.scale)
+  } catch (e) {
+    console.error('fetch liepin filter options failed', e)
+  }
+}
 
 function liepinDeliveryStatus(status?: string) {
   return status || '未投递'
@@ -101,6 +124,7 @@ const refreshAll = () => {
 }
 
 onMounted(() => {
+  void loadFilterOptions()
   void loadList(1, size.value)
   void loadStats()
 })
@@ -157,7 +181,7 @@ const totalPages = computed(() => Math.max(1, Math.ceil(total.value / size.value
 
 const avgSalaryDisplay = computed(() => {
   if (kpi.value?.avgMonthlyK != null && kpi.value.avgMonthlyK > 0) {
-    return formatAvgSalaryK(kpi.value.avgMonthlyK)
+    return formatSalaryByUnit(kpi.value.avgMonthlyK, salaryUnit)
   }
   const ks: number[] = []
   for (const it of items.value) {
@@ -165,7 +189,7 @@ const avgSalaryDisplay = computed(() => {
     if (info && !Number.isNaN(info.medianK)) ks.push(info.medianK)
   }
   if (!ks.length) return '—'
-  return formatAvgSalaryK(ks.reduce((a, b) => a + b, 0) / ks.length)
+  return formatSalaryByUnit(ks.reduce((a, b) => a + b, 0) / ks.length, salaryUnit)
 })
 
 const kpiItems = computed<KpiItem[]>(() => [
@@ -173,7 +197,7 @@ const kpiItems = computed<KpiItem[]>(() => [
   { label: '已投递', value: kpi.value?.delivered ?? 0, highlight: 'delivered' },
   { label: '未投递', value: kpi.value?.pending ?? 0, highlight: 'pending' },
   { label: '已过滤', value: kpi.value?.filtered ?? 0, highlight: 'filtered' },
-  { label: '均薪(K)', value: avgSalaryDisplay.value, highlight: 'salary' },
+  { label: salaryKpiLabel('liepin'), value: avgSalaryDisplay.value, highlight: 'salary' },
 ])
 
 const chartConfigs = computed(() => buildChartConfigs(stats.value?.charts, 'liepin'))
@@ -220,6 +244,11 @@ const columns = computed<TableColumn<LiepinJob>[]>(() => [
       :show-reload="PLATFORM_RELOAD.liepin"
       :loading-list="loadingList"
       :exporting="exporting"
+      :salary-unit="salaryUnit"
+      :location-options="locationOptions"
+      :experience-options="experienceOptions"
+      :degree-options="degreeOptions"
+      :scale-options="scaleOptions"
       experience-field-type="select"
       @update:filter="onFilterPatch"
       @apply="applyFilter"

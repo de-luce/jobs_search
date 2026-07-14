@@ -30,7 +30,7 @@ logging:
   pattern:
     console: "%clr(%d{yyyy-MM-dd HH:mm:ss.SSS}){faint} %clr([%thread]){magenta} %clr(%-5level){highlight} %clr(%logger{36}){cyan} %clr(-){faint} %msg%n"
   file:
-    name: ./target/logs/jobs_search.log
+    name: ./logs/jobs_search.log
   logback:
     rolling policy:
       max-history: 30

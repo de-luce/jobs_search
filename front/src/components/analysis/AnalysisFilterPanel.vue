@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import Card from '@/components/ui/Card.vue'
 import CardContent from '@/components/ui/CardContent.vue'
 import CardHeader from '@/components/ui/CardHeader.vue'
@@ -8,20 +9,37 @@ import Input from '@/components/ui/Input.vue'
 import Select from '@/components/ui/Select.vue'
 import Label from '@/components/ui/Label.vue'
 import { statusFilterClass } from '@/components/analysis/kpiHelpers'
-import type { AnalysisFilterState } from '@/lib/analysis'
+import type { AnalysisFilterOption, AnalysisFilterState } from '@/lib/analysis'
+import type { SalaryDisplayUnit } from '@/lib/salary'
 
-type ExperienceFieldType = 'input' | 'select'
-
-const props = defineProps<{
-  filter: AnalysisFilterState
-  statusOptions: string[]
-  showHeadhunterFilter?: boolean
-  showReload?: boolean
-  loadingList?: boolean
-  reloading?: boolean
-  exporting?: boolean
-  experienceFieldType?: ExperienceFieldType
-}>()
+const props = withDefaults(
+  defineProps<{
+    filter: AnalysisFilterState
+    statusOptions: string[]
+    showHeadhunterFilter?: boolean
+    showReload?: boolean
+    loadingList?: boolean
+    reloading?: boolean
+    exporting?: boolean
+    experienceFieldType?: 'input' | 'select'
+    salaryUnit?: SalaryDisplayUnit
+    locationOptions?: AnalysisFilterOption[]
+    experienceOptions?: AnalysisFilterOption[]
+    degreeOptions?: AnalysisFilterOption[]
+    industryOptions?: AnalysisFilterOption[]
+    scaleOptions?: AnalysisFilterOption[]
+    stageOptions?: AnalysisFilterOption[]
+  }>(),
+  {
+    salaryUnit: 'K',
+    locationOptions: () => [],
+    experienceOptions: () => [],
+    degreeOptions: () => [],
+    industryOptions: () => [],
+    scaleOptions: () => [],
+    stageOptions: () => [],
+  }
+)
 
 const emit = defineEmits<{
   'update:filter': [patch: Partial<AnalysisFilterState>]
@@ -41,6 +59,14 @@ function toggleStatus(s: string, checked: boolean) {
       : props.filter.statuses.filter((x) => x !== s),
   })
 }
+
+const salaryHint = computed(() =>
+  props.salaryUnit === '万'
+    ? '月薪（万），如 1.5'
+    : props.salaryUnit === '万/年'
+      ? '年薪（万），如 30'
+      : '月薪（K），如 15'
+)
 </script>
 
 <template>
@@ -76,7 +102,18 @@ function toggleStatus(s: string, checked: boolean) {
       <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <div>
           <Label>城市</Label>
+          <Select
+            v-if="locationOptions.length"
+            :model-value="filter.location"
+            @update:model-value="patch({ location: $event })"
+          >
+            <option value="">不限</option>
+            <option v-for="o in locationOptions" :key="o.code || o.name" :value="o.name">
+              {{ o.name }}
+            </option>
+          </Select>
           <Input
+            v-else
             :model-value="filter.location"
             placeholder="深圳"
             @update:model-value="patch({ location: $event })"
@@ -85,14 +122,21 @@ function toggleStatus(s: string, checked: boolean) {
         <div>
           <Label>经验</Label>
           <Select
-            v-if="experienceFieldType === 'select'"
+            v-if="experienceFieldType === 'select' || experienceOptions.length"
             :model-value="filter.experience"
             @update:model-value="patch({ experience: $event })"
           >
             <option value="">不限</option>
-            <option value="1-3年">1-3年</option>
-            <option value="3-5年">3-5年</option>
-            <option value="5-10年">5-10年</option>
+            <template v-if="experienceOptions.length">
+              <option v-for="o in experienceOptions" :key="o.code || o.name" :value="o.name">
+                {{ o.name }}
+              </option>
+            </template>
+            <template v-else>
+              <option value="1-3年">1-3年</option>
+              <option value="3-5年">3-5年</option>
+              <option value="5-10年">5-10年</option>
+            </template>
           </Select>
           <Input
             v-else
@@ -104,13 +148,20 @@ function toggleStatus(s: string, checked: boolean) {
         <div>
           <Label>学历</Label>
           <Select
-            v-if="experienceFieldType === 'select'"
+            v-if="experienceFieldType === 'select' || degreeOptions.length"
             :model-value="filter.degree"
             @update:model-value="patch({ degree: $event })"
           >
             <option value="">不限</option>
-            <option value="本科">本科</option>
-            <option value="硕士">硕士</option>
+            <template v-if="degreeOptions.length">
+              <option v-for="o in degreeOptions" :key="o.code || o.name" :value="o.name">
+                {{ o.name }}
+              </option>
+            </template>
+            <template v-else>
+              <option value="本科">本科</option>
+              <option value="硕士">硕士</option>
+            </template>
           </Select>
           <Input
             v-else
@@ -120,17 +171,21 @@ function toggleStatus(s: string, checked: boolean) {
           />
         </div>
         <div>
-          <Label>最低K</Label>
+          <Label>最低{{ salaryUnit }}</Label>
           <Input
             type="number"
+            step="any"
+            :placeholder="salaryHint"
             :model-value="filter.minK"
             @update:model-value="patch({ minK: $event })"
           />
         </div>
         <div>
-          <Label>最高K</Label>
+          <Label>最高{{ salaryUnit }}</Label>
           <Input
             type="number"
+            step="any"
+            :placeholder="salaryHint"
             :model-value="filter.maxK"
             @update:model-value="patch({ maxK: $event })"
           />
@@ -142,6 +197,36 @@ function toggleStatus(s: string, checked: boolean) {
             placeholder="公司/岗位"
             @update:model-value="patch({ keyword: $event })"
           />
+        </div>
+        <div v-if="industryOptions.length">
+          <Label>行业</Label>
+          <Select
+            :model-value="filter.industry"
+            @update:model-value="patch({ industry: $event })"
+          >
+            <option value="">不限</option>
+            <option v-for="o in industryOptions" :key="o.code || o.name" :value="o.name">
+              {{ o.name }}
+            </option>
+          </Select>
+        </div>
+        <div v-if="scaleOptions.length">
+          <Label>规模</Label>
+          <Select :model-value="filter.scale" @update:model-value="patch({ scale: $event })">
+            <option value="">不限</option>
+            <option v-for="o in scaleOptions" :key="o.code || o.name" :value="o.name">
+              {{ o.name }}
+            </option>
+          </Select>
+        </div>
+        <div v-if="stageOptions.length">
+          <Label>融资</Label>
+          <Select :model-value="filter.stage" @update:model-value="patch({ stage: $event })">
+            <option value="">不限</option>
+            <option v-for="o in stageOptions" :key="o.code || o.name" :value="o.name">
+              {{ o.name }}
+            </option>
+          </Select>
         </div>
       </div>
 

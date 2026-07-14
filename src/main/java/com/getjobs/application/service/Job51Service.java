@@ -7,6 +7,7 @@ import com.getjobs.application.mapper.Job51ConfigMapper;
 import com.getjobs.application.mapper.Job51Mapper;
 import com.getjobs.application.mapper.Job51OptionMapper;
 import com.getjobs.application.utils.DeliveryStatuses;
+import com.getjobs.application.utils.SalaryParseUtil;
 import com.getjobs.worker.job51.Job51Config;
 import com.mybatisflex.core.query.QueryChain;
 import jakarta.annotation.PostConstruct;
@@ -646,7 +647,7 @@ public class Job51Service {
                         .collect(java.util.stream.Collectors.toSet());
                 if (!statusSet.isEmpty()) wrapper.where(JOB51.DELIVERY_STATUS.in(statusSet));
             }
-            if (location != null && !location.trim().isEmpty()) wrapper.and(JOB51.JOB_AREA.eq(location.trim()));
+            if (location != null && !location.trim().isEmpty()) wrapper.and(JOB51.JOB_AREA.like(location.trim()));
             if (experience != null && !experience.trim().isEmpty()) wrapper.and(JOB51.JOB_EXP_REQ.eq(experience.trim()));
             if (degree != null && !degree.trim().isEmpty()) wrapper.and(JOB51.JOB_EDU_REQ.eq(degree.trim()));
             if (keyword != null && !keyword.trim().isEmpty()) {
@@ -773,7 +774,7 @@ public class Job51Service {
                     .collect(java.util.stream.Collectors.toSet());
             if (!statusSet.isEmpty()) wrapper.where(JOB51.DELIVERY_STATUS.in(statusSet));
         }
-        if (location != null && !location.trim().isEmpty()) wrapper.and(JOB51.JOB_AREA.eq(location.trim()));
+        if (location != null && !location.trim().isEmpty()) wrapper.and(JOB51.JOB_AREA.like(location.trim()));
         if (experience != null && !experience.trim().isEmpty()) wrapper.and(JOB51.JOB_EXP_REQ.eq(experience.trim()));
         if (degree != null && !degree.trim().isEmpty()) wrapper.and(JOB51.JOB_EDU_REQ.eq(degree.trim()));
         if (keyword != null && !keyword.trim().isEmpty()) {
@@ -835,35 +836,11 @@ public class Job51Service {
     // ==================== 薪资解析 ====================
     private static class SalaryInfo { Double medianK; }
     private SalaryInfo parse51Salary(String salaryText) {
-        if (salaryText == null) return null;
-        String s = salaryText.trim().toLowerCase();
-        if (s.isEmpty() || s.contains("面议")) return null;
-        // 提取数字范围（支持小数）
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+(?:\\.\\d+)?)\s*[-~]\s*(\\d+(?:\\.\\d+)?)").matcher(s);
-        Double a = null, b = null;
-        if (m.find()) {
-            a = Double.valueOf(m.group(1));
-            b = Double.valueOf(m.group(2));
-        } else {
-            java.util.regex.Matcher m2 = java.util.regex.Pattern.compile("(\\d+(?:\\.\\d+)?)").matcher(s);
-            if (m2.find()) {
-                a = Double.valueOf(m2.group(1)); b = a;
-            }
-        }
-        if (a == null || b == null) return null;
-        double min = Math.min(a, b), max = Math.max(a, b);
-        double factorK = 1.0; // 数值单位到K
-        // 单位判断
-        if (s.contains("k")) factorK = 1.0;
-        else if (s.contains("千") && s.contains("/月")) factorK = 1.0;
-        else if (s.contains("万") && s.contains("/月")) factorK = 10.0;
-        else if (s.contains("万") && (s.contains("/年") || s.contains("年"))) factorK = 10.0 / 12.0;
-        else if (s.contains("元/天")) {
-            // 粗略换算：按22个工作日，每天X元 -> 月K
-            factorK = (1.0 / 1000.0) * 22.0;
-        }
-        double medianK = ((min + max) / 2.0) * factorK;
-        SalaryInfo info = new SalaryInfo(); info.medianK = medianK; return info;
+        SalaryParseUtil.SalaryInfo parsed = SalaryParseUtil.parse(salaryText);
+        if (parsed == null || parsed.medianK == null) return null;
+        SalaryInfo info = new SalaryInfo();
+        info.medianK = parsed.medianK;
+        return info;
     }
 
     private String nullSafe(String s) { return (s == null || s.isEmpty()) ? "未知" : s; }

@@ -1,5 +1,8 @@
 import type { AnalysisCharts } from '@/lib/analysis'
+import { PLATFORM_SALARY_UNIT } from '@/lib/analysis'
 import { CATEGORY_COLORS } from '@/lib/chartColors'
+import type { PlatformId } from '@/lib/platform'
+import type { SalaryDisplayUnit } from '@/lib/salary'
 
 export type ChartConfig = {
   key: string
@@ -12,8 +15,22 @@ export type ChartConfig = {
   icon?: string
 }
 
+function remapSalaryBucketLabel(bucket: string, unit: SalaryDisplayUnit): string {
+  if (unit === 'K') return bucket
+  const convert = (n: number) => {
+    if (unit === '万') return String(Math.round((n / 10) * 10) / 10)
+    return String(Math.round(((n * 12) / 10) * 10) / 10)
+  }
+  const range = bucket.match(/^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)K$/i)
+  if (range) return `${convert(Number(range[1]))}-${convert(Number(range[2]))}${unit}`
+  const ge = bucket.match(/^>=\s*(\d+(?:\.\d+)?)K$/i)
+  if (ge) return `>=${convert(Number(ge[1]))}${unit}`
+  return bucket.replace(/K/gi, unit)
+}
+
 export function buildChartConfigs(stats: AnalysisCharts | undefined, platform: string): ChartConfig[] {
   const c = stats || {}
+  const unit = PLATFORM_SALARY_UNIT[platform as PlatformId] || 'K'
   const base: ChartConfig[] = [
     {
       key: 'byStatus',
@@ -88,9 +105,9 @@ export function buildChartConfigs(stats: AnalysisCharts | undefined, platform: s
   if (c.salaryBuckets?.length) {
     base.push({
       key: 'salaryBuckets',
-      title: '薪资区间',
+      title: `薪资区间（${unit}）`,
       type: platform === 'boss' || platform === '51job' ? 'line' : 'bar',
-      labels: c.salaryBuckets.map((x) => x.bucket),
+      labels: c.salaryBuckets.map((x) => remapSalaryBucketLabel(x.bucket, unit)),
       data: c.salaryBuckets.map((x) => x.value),
       colors: platform === 'boss' || platform === '51job' ? undefined : CATEGORY_COLORS,
       color: platform === 'boss' || platform === '51job' ? '#ef4444' : undefined,

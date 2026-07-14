@@ -279,7 +279,7 @@ async function handleSaveConfig() {
             <ConfigField
               label="薪资范围"
               html-for="salary"
-              hint="最低和最高工资，用逗号分割，如：12000, 20000 或 不限"
+              hint="最低和最高工资（元/月），用逗号分割，如：12000, 20000 或 不限"
             >
               <Input
                 id="salary"

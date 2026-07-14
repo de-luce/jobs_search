@@ -6,6 +6,7 @@ import com.getjobs.application.entity.ZhilianJobDataEntity;
 import com.getjobs.application.mapper.ZhilianConfigMapper;
 import com.getjobs.application.mapper.ZhilianOptionMapper;
 import com.getjobs.application.mapper.ZhilianJobDataMapper;
+import com.getjobs.application.utils.SalaryParseUtil;
 import com.getjobs.worker.zhilian.ZhilianConfig;
 import com.mybatisflex.core.query.QueryChain;
 import com.mybatisflex.core.update.UpdateChain;
@@ -261,47 +262,16 @@ public class ZhilianService {
         public Long annualTotal;  // 年包（单位：元）
     }
 
-    /** 解析薪资字符串，支持示例：20-40K、35-65K·16薪、30K·15薪、面议（返回null） */
+    /** 解析薪资字符串，统一换算为月薪 K（支持 K / 万 / 元 / 年薪） */
     public static SalaryInfo parseSalary(String salary) {
-        if (salary == null) return null;
-        String s = salary.trim();
-        if (s.isEmpty()) return null;
-        if (s.contains("面议")) return null;
-        s = s.replace(" ", "");
-
-        Integer months = 12;
-        java.util.regex.Matcher mMonths = java.util.regex.Pattern.compile("[·\\.\\-]?([0-9]+)薪").matcher(s);
-        if (mMonths.find()) {
-            try { months = Integer.parseInt(mMonths.group(1)); } catch (Exception ignore) {}
-            s = s.substring(0, mMonths.start());
-        }
-
-        Integer minK = null, maxK = null;
-        java.util.regex.Matcher mRange = java.util.regex.Pattern.compile("^(\\d+)-(\\d+)[Kk]$").matcher(s);
-        java.util.regex.Matcher mSingle = java.util.regex.Pattern.compile("^(\\d+)[Kk]$").matcher(s);
-        if (mRange.find()) {
-            try { minK = Integer.parseInt(mRange.group(1)); maxK = Integer.parseInt(mRange.group(2)); } catch (Exception ignore) {}
-        } else if (mSingle.find()) {
-            try { minK = Integer.parseInt(mSingle.group(1)); maxK = minK; } catch (Exception ignore) {}
-        } else {
-            String cleaned = s.replaceAll("[^0-9Kk\\-]", "");
-            mRange = java.util.regex.Pattern.compile("^(\\d+)-(\\d+)[Kk]$").matcher(cleaned);
-            mSingle = java.util.regex.Pattern.compile("^(\\d+)[Kk]$").matcher(cleaned);
-            if (mRange.find()) {
-                try { minK = Integer.parseInt(mRange.group(1)); maxK = Integer.parseInt(mRange.group(2)); } catch (Exception ignore) {}
-            } else if (mSingle.find()) {
-                try { minK = Integer.parseInt(mSingle.group(1)); maxK = minK; } catch (Exception ignore) {}
-            }
-        }
-
-        if (minK == null || maxK == null) return null;
-
+        SalaryParseUtil.SalaryInfo parsed = SalaryParseUtil.parse(salary);
+        if (parsed == null || parsed.medianK == null) return null;
         SalaryInfo info = new SalaryInfo();
-        info.minK = minK;
-        info.maxK = maxK;
-        info.months = months != null ? months : 12;
-        info.medianK = (minK + maxK) / 2.0;
-        info.annualTotal = Math.round(info.medianK * 1000 * info.months);
+        info.minK = parsed.minK == null ? null : (int) Math.round(parsed.minK);
+        info.maxK = parsed.maxK == null ? null : (int) Math.round(parsed.maxK);
+        info.months = parsed.months != null ? parsed.months : 12;
+        info.medianK = parsed.medianK;
+        info.annualTotal = parsed.annualTotal;
         return info;
     }
 
@@ -349,7 +319,7 @@ public class ZhilianService {
             wrapper.where(ZHILIAN_JOB_DATA.DELIVERY_STATUS.in(
                     statuses.stream().filter(Objects::nonNull).map(String::trim).collect(Collectors.toSet())));
         }
-        if (location != null && !location.trim().isEmpty()) wrapper.and(ZHILIAN_JOB_DATA.LOCATION.eq(location.trim()));
+        if (location != null && !location.trim().isEmpty()) wrapper.and(ZHILIAN_JOB_DATA.LOCATION.like(location.trim()));
         if (experience != null && !experience.trim().isEmpty()) wrapper.and(ZHILIAN_JOB_DATA.EXPERIENCE.eq(experience.trim()));
         if (degree != null && !degree.trim().isEmpty()) wrapper.and(ZHILIAN_JOB_DATA.DEGREE.eq(degree.trim()));
         if (keyword != null && !keyword.trim().isEmpty()) {
@@ -483,7 +453,7 @@ public class ZhilianService {
             wrapper.where(ZHILIAN_JOB_DATA.DELIVERY_STATUS.in(
                     statuses.stream().filter(Objects::nonNull).map(String::trim).collect(Collectors.toSet())));
         }
-        if (location != null && !location.trim().isEmpty()) wrapper.and(ZHILIAN_JOB_DATA.LOCATION.eq(location.trim()));
+        if (location != null && !location.trim().isEmpty()) wrapper.and(ZHILIAN_JOB_DATA.LOCATION.like(location.trim()));
         if (experience != null && !experience.trim().isEmpty()) wrapper.and(ZHILIAN_JOB_DATA.EXPERIENCE.eq(experience.trim()));
         if (degree != null && !degree.trim().isEmpty()) wrapper.and(ZHILIAN_JOB_DATA.DEGREE.eq(degree.trim()));
 
