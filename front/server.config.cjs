@@ -10,8 +10,8 @@ module.exports = {
   development: {
     // 是否开启 Turbopack
     turbo: true,
-    // 是否自动打开浏览器
-    open: true,
+    // 不要用系统浏览器打开：由后端 Playwright 在自动化 Chrome 中打开管理页
+    open: false,
     // 绑定到 IPv4 避免在 Windows 上 ::1 权限问题
     hostname: '127.0.0.1',
   },
