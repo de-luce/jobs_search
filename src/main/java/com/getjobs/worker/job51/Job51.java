@@ -17,7 +17,9 @@ import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -61,6 +63,8 @@ public class Job51 {
     private int currentPageNum = 0;
     // 当前页从JSON拦截到的jobId列表
     private final java.util.List<Long> currentPageJobIds = new java.util.ArrayList<>();
+    /** 当前页 jobId → 公司名（优先用 API，避免 DOM 下标错位） */
+    private final Map<Long, String> currentPageCompanyByJobId = new HashMap<>();
 
     private static final int DEFAULT_MAX_PAGE = 50;
     private static final String BASE_URL = "https://we.51job.com/pc/search";
@@ -195,13 +199,11 @@ public class Job51 {
                                     if (isJson) {
                                         // 解析并保存到数据库
                                         job51Service.parseAndPersistJob51SearchJson(text);
-                                        // 📋 提取当前页的jobId列表并缓存
-                                        List<Long> jobIds = extractJobIdsFromJson(text);
-                                        if (jobIds != null && !jobIds.isEmpty()) {
-                                            synchronized (currentPageJobIds) {
-                                                currentPageJobIds.clear();
-                                                currentPageJobIds.addAll(jobIds);
-                                            }
+                                        // 提取当前页 jobId + 公司名并缓存
+                                        cachePageJobsFromJson(text);
+                                        List<Long> jobIds;
+                                        synchronized (currentPageJobIds) {
+                                            jobIds = new ArrayList<>(currentPageJobIds);
                                         }
                                         CompletableFuture<Integer> future = searchApiFuture;
                                         if (future != null && !future.isDone()) {
@@ -337,6 +339,10 @@ public class Job51 {
             }
 
             // 选中未命中黑名单的职位
+            Map<Long, String> companyByJobId;
+            synchronized (currentPageCompanyByJobId) {
+                companyByJobId = new HashMap<>(currentPageCompanyByJobId);
+            }
             for (int i = 0; i < jobCount; i++) {
                 if (shouldStop()) {
                     return 0;
@@ -344,8 +350,12 @@ public class Job51 {
 
                 try {
                     String title = i < titles.count() ? titles.nth(i).textContent() : "未知职位";
-                    String company = i < companies.count() ? companies.nth(i).textContent() : "未知公司";
                     Long jobId = (i < pageJobIds.size()) ? pageJobIds.get(i) : null;
+                    String company = resolveJob51CompanyName(jobId, i, companies, companyByJobId);
+                    if (BlacklistService.isPlaceholderCompany(company)) {
+                        log.info("无法解析公司名，跳过勾选以防黑名单漏拦 | 岗位：{} | jobId：{}", title, jobId);
+                        continue;
+                    }
                     String matchedBlacklist = blacklistService.findMatchedCompany(company);
                     if (matchedBlacklist != null) {
                         log.info("被过滤：公司名命中全局黑名单「{}」 | 公司：{} | 岗位：{}", matchedBlacklist, company, title);
@@ -1577,19 +1587,39 @@ public class Job51 {
     }
 
     /**
-     * 从JSON文本中提取jobId列表
+     * 优先用 API 缓存的公司名；缺失时再回退 DOM（仍可能因下标错位不准）。
      */
-    private List<Long> extractJobIdsFromJson(String json) {
-        List<Long> jobIds = new ArrayList<>();
-        if (json == null || json.trim().isEmpty()) {
-            return jobIds;
+    private String resolveJob51CompanyName(Long jobId, int index, Locator companies, Map<Long, String> companyByJobId) {
+        if (jobId != null && companyByJobId != null) {
+            String fromApi = companyByJobId.get(jobId);
+            if (!BlacklistService.isPlaceholderCompany(fromApi)) {
+                return fromApi.trim();
+            }
         }
-        
+        try {
+            if (companies != null && index < companies.count()) {
+                String raw = companies.nth(index).textContent();
+                if (raw != null && !raw.isBlank()) {
+                    return raw.replace('\u00a0', ' ').replaceAll("\\s+", " ").trim();
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /**
+     * 从搜索 JSON 缓存当前页 jobId 与公司名。
+     */
+    private void cachePageJobsFromJson(String json) {
+        List<Long> jobIds = new ArrayList<>();
+        Map<Long, String> companies = new HashMap<>();
+        if (json == null || json.trim().isEmpty()) {
+            return;
+        }
         try {
             com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
             com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(json);
-            
-            // 兼容多种列表命名
+
             com.fasterxml.jackson.databind.JsonNode list = root.path("data").path("items");
             if (!list.isArray()) list = root.path("data").path("jobList");
             if (!list.isArray()) list = root.path("data").path("list");
@@ -1597,30 +1627,62 @@ public class Job51 {
             if (!list.isArray()) list = root.path("resultbody").path("job").path("items");
             if (!list.isArray()) list = root.path("job").path("items");
             if (!list.isArray()) list = root.path("resultbody").path("items");
-            
             if (!list.isArray()) {
-                return jobIds;
+                return;
             }
-            
-            // 提取每个jobId
+
             for (com.fasterxml.jackson.databind.JsonNode item : list) {
-                com.fasterxml.jackson.databind.JsonNode jobIdNode = item.path("jobId");
-                if (!jobIdNode.isMissingNode() && !jobIdNode.isNull()) {
-                    try {
-                        Long jobId = jobIdNode.asLong();
-                        if (jobId != null && jobId > 0) {
-                            jobIds.add(jobId);
-                        }
-                    } catch (Exception e) {
-                        // 忽略单个解析失败
-                    }
+                Long jobId = readJob51JobId(item);
+                if (jobId == null) {
+                    continue;
+                }
+                jobIds.add(jobId);
+                String company = readJob51CompanyName(item);
+                if (!BlacklistService.isPlaceholderCompany(company)) {
+                    companies.put(jobId, company.trim());
                 }
             }
-            
         } catch (Exception e) {
-            log.warn("[51job] 解析JSON提取jobId失败: {}", e.getMessage());
+            log.warn("[51job] 解析JSON提取jobId/公司名失败: {}", e.getMessage());
+            return;
         }
-        
-        return jobIds;
+
+        if (!jobIds.isEmpty()) {
+            synchronized (currentPageJobIds) {
+                currentPageJobIds.clear();
+                currentPageJobIds.addAll(jobIds);
+            }
+            synchronized (currentPageCompanyByJobId) {
+                currentPageCompanyByJobId.clear();
+                currentPageCompanyByJobId.putAll(companies);
+            }
+        }
     }
+
+    private static Long readJob51JobId(com.fasterxml.jackson.databind.JsonNode item) {
+        com.fasterxml.jackson.databind.JsonNode jobIdNode = item.path("jobId");
+        if (jobIdNode.isMissingNode() || jobIdNode.isNull()) {
+            return null;
+        }
+        try {
+            long jobId = jobIdNode.asLong();
+            return jobId > 0 ? jobId : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static String readJob51CompanyName(com.fasterxml.jackson.databind.JsonNode item) {
+        for (String key : new String[]{"fullCompanyName", "companyName", "ctmName"}) {
+            try {
+                String v = item.path(key).asText(null);
+                if (v != null && !v.isBlank() && !"null".equals(v)) {
+                    return v;
+                }
+            } catch (Exception ignored) {}
+        }
+        return null;
+    }
+
+
 }

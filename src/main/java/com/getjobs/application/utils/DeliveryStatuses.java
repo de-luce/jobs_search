@@ -28,4 +28,31 @@ public final class DeliveryStatuses {
         if (code == 2) return FILTERED;
         return PENDING;
     }
+
+    /** 页面按钮文案表示「已沟通过 / 可继续聊」→ 应记为已投递，勿再点 */
+    public static boolean isAlreadyChattedButton(String buttonText) {
+        if (buttonText == null || buttonText.isBlank()) {
+            return false;
+        }
+        String t = buttonText.trim();
+        return t.contains("继续聊")
+                || t.contains("继续沟通")
+                || t.contains("已沟通")
+                || t.contains("聊过")
+                || t.contains("已聊")
+                || t.contains("已投递")
+                || t.contains("已申请");
+    }
+
+    /** 页面按钮文案表示「尚未沟通，可以新投」 */
+    public static boolean isFreshChatButton(String buttonText) {
+        if (buttonText == null || buttonText.isBlank()) {
+            return false;
+        }
+        String t = buttonText.trim();
+        if (isAlreadyChattedButton(t)) {
+            return false;
+        }
+        return t.contains("立即沟通") || t.contains("聊一聊") || t.contains("立即投递");
+    }
 }

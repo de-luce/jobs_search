@@ -4,6 +4,7 @@ import com.getjobs.application.entity.AiEntity;
 import com.getjobs.application.service.AiService;
 import com.getjobs.application.service.BlacklistService;
 import com.getjobs.application.service.BossService;
+import com.getjobs.application.utils.DeliveryStatuses;
 import com.getjobs.worker.utils.Job;
 import com.getjobs.worker.utils.JobUtils;
 import com.getjobs.worker.utils.PlaywrightUtil;
@@ -211,45 +212,53 @@ public class Boss {
                 String bossName = null;
                 String bossActive = null;
                 String bossCompany = null;
+                java.util.List<String> companyCandidates = new java.util.ArrayList<>();
 
-                if (detailResp != null) {
-                    try {
-                        String body = detailResp.text();
-                        // 保存原始 JSON 便于调试
-                        appendRawJson(body);
-                        // 解析并入库（仅在点击卡片触发时执行）
-                        processJobDetailJsonAndInsert(body);
+                if (detailResp == null) {
+                    log.info("岗位详情未获取到，跳过投递（无法校验黑名单）| 索引：{}", i);
+                    continue;
+                }
+                try {
+                    String body = detailResp.text();
+                    // 保存原始 JSON 便于调试
+                    appendRawJson(body);
+                    // 解析并入库（仅在点击卡片触发时执行）
+                    processJobDetailJsonAndInsert(body);
 
-                        // 从 JSON 构建用于投递与过滤的字段
-                        org.json.JSONObject root = new org.json.JSONObject(body);
-                        org.json.JSONObject zpData = root.optJSONObject("zpData");
-                        org.json.JSONObject jobInfo = zpData != null ? zpData.optJSONObject("jobInfo") : null;
-                        org.json.JSONObject brand = zpData != null ? zpData.optJSONObject("brandComInfo") : null;
-                        org.json.JSONObject boss = zpData != null ? zpData.optJSONObject("bossInfo") : null;
+                    // 从 JSON 构建用于投递与过滤的字段
+                    org.json.JSONObject root = new org.json.JSONObject(body);
+                    org.json.JSONObject zpData = root.optJSONObject("zpData");
+                    org.json.JSONObject jobInfo = zpData != null ? zpData.optJSONObject("jobInfo") : null;
+                    org.json.JSONObject brand = zpData != null ? zpData.optJSONObject("brandComInfo") : null;
+                    org.json.JSONObject boss = zpData != null ? zpData.optJSONObject("bossInfo") : null;
 
-                        if (jobInfo != null) {
-                            jobName = jobInfo.optString("jobName", "");
-                            jobSalary = jobInfo.optString("salaryDesc", "");
-                            String city = jobInfo.optString("locationName", "");
-                            String exp = jobInfo.optString("experienceName", "");
-                            String deg = jobInfo.optString("degreeName", "");
-                            if (!city.isEmpty()) tags.add(city);
-                            if (!exp.isEmpty()) tags.add(exp);
-                            if (!deg.isEmpty()) tags.add(deg);
-                            jobDesc = jobInfo.optString("postDescription", "");
-                        }
-
-                        if (boss != null) {
-                            bossName = boss.optString("name", "");
-                            bossActive = boss.optString("activeTimeDesc", "");
-                        }
-
-                        if (brand != null) {
-                            bossCompany = brand.optString("brandName", "");
-                        }
-                    } catch (Throwable e) {
-                        log.debug("点击卡片后解析岗位详情用于过滤失败：{}", e.getMessage());
+                    if (jobInfo != null) {
+                        jobName = jobInfo.optString("jobName", "");
+                        jobSalary = jobInfo.optString("salaryDesc", "");
+                        String city = jobInfo.optString("locationName", "");
+                        String exp = jobInfo.optString("experienceName", "");
+                        String deg = jobInfo.optString("degreeName", "");
+                        if (!city.isEmpty()) tags.add(city);
+                        if (!exp.isEmpty()) tags.add(exp);
+                        if (!deg.isEmpty()) tags.add(deg);
+                        jobDesc = jobInfo.optString("postDescription", "");
                     }
+
+                    if (boss != null) {
+                        bossName = boss.optString("name", "");
+                        bossActive = boss.optString("activeTimeDesc", "");
+                    }
+
+                    companyCandidates = collectBossCompanyNames(brand);
+                    bossCompany = companyCandidates.isEmpty() ? null : companyCandidates.get(0);
+                } catch (Throwable e) {
+                    log.info("点击卡片后解析岗位详情失败，跳过投递（无法校验黑名单）| 原因：{}", e.getMessage());
+                    continue;
+                }
+
+                if (companyCandidates.isEmpty()) {
+                    log.info("公司名为空，跳过投递（无法校验黑名单）| 岗位：{}", jobName != null ? jobName : "");
+                    continue;
                 }
 
                 // HR活跃状态过滤：当开启过滤开关且活跃描述包含“年”时，视为不活跃
@@ -259,8 +268,8 @@ public class Boss {
                     continue;
                 }
 
-                // 全局公司黑名单：公司名 LIKE 任一词条则跳过投递
-                String matchedBlacklist = blacklistService.findMatchedCompany(bossCompany);
+                // 全局公司黑名单：品牌名/全称等任一命中则跳过投递
+                String matchedBlacklist = blacklistService.findMatchedCompanyAny(companyCandidates);
                 if (matchedBlacklist != null) {
                     log.info("被过滤：公司名命中全局黑名单「{}」 | 公司：{} | 岗位：{}", matchedBlacklist, bossCompany != null ? bossCompany : "", jobName != null ? jobName : "");
                     continue;
@@ -333,7 +342,8 @@ public class Boss {
             entity.setEncryptId(encryptId);
             entity.setEncryptUserId(encryptUserId);
 
-            entity.setCompanyName(brand != null ? brand.optString("brandName", null) : null);
+            java.util.List<String> companyCandidates = collectBossCompanyNames(brand);
+            entity.setCompanyName(companyCandidates.isEmpty() ? null : companyCandidates.get(0));
             entity.setIndustry(brand != null ? brand.optString("industryName", null) : null);
             entity.setIntroduce(brand != null ? brand.optString("introduce", null) : null);
             entity.setFinancingStage(brand != null ? brand.optString("stageName", null) : null);
@@ -357,12 +367,12 @@ public class Boss {
                 }
             }
 
-            // 全局公司黑名单：公司名命中则标记为已过滤，仍入库
-            if (!filtered && blacklistService.isCompanyBlacklisted(entity.getCompanyName())) {
+            // 全局公司黑名单：品牌名/全称等任一命中则标记为已过滤，仍入库
+            if (!filtered && blacklistService.findMatchedCompanyAny(companyCandidates) != null) {
                 filtered = true;
             }
 
-            entity.setDeliveryStatus(filtered ? "已过滤" : "未投递");
+            entity.setDeliveryStatus(filtered ? DeliveryStatuses.FILTERED : DeliveryStatuses.PENDING);
 
             // 入库（若不存在），优先以 encrypt_id + encrypt_user_id 去重；若 userId 缺失，则以 encrypt_id 去重
             if (encryptId != null) {
@@ -384,6 +394,26 @@ public class Boss {
         } catch (Throwable e) {
             log.debug("解析岗位详情 JSON 失败：{}", e.getMessage());
         }
+    }
+
+    /** 从 brandComInfo 收集可用于黑名单匹配的公司名（品牌名优先，兼容可能存在的全称字段） */
+    private static java.util.List<String> collectBossCompanyNames(JSONObject brand) {
+        java.util.List<String> names = new java.util.ArrayList<>();
+        if (brand == null) {
+            return names;
+        }
+        String[] keys = {"brandName", "companyName", "comName", "customerName", "brandFullName", "name"};
+        for (String key : keys) {
+            String v = brand.optString(key, null);
+            if (v == null || v.isBlank() || BlacklistService.isPlaceholderCompany(v)) {
+                continue;
+            }
+            String trimmed = v.trim();
+            if (!names.contains(trimmed)) {
+                names.add(trimmed);
+            }
+        }
+        return names;
     }
 
     public String decodeSalary(String text) {
@@ -613,8 +643,9 @@ public class Boss {
         detailPage.navigate(detailUrl);
         PlaywrightUtil.sleep(1);
 
-        // 3. 查找"立即沟通"按钮
+        // 3. 查找沟通按钮：「立即沟通」可新投；「继续沟通/继续聊」视为已投递
         Locator chatBtn = detailPage.locator("a.btn-startchat, a.op-btn-chat");
+        String chatBtnText = "";
         boolean foundChatBtn = false;
         for (int i = 0; i < 5; i++) {
             if (shouldStopCallback != null && Boolean.TRUE.equals(shouldStopCallback.get())) {
@@ -622,21 +653,50 @@ public class Boss {
                 try { detailPage.close(); } catch (Exception ignore) {}
                 return;
             }
-            if (chatBtn.count() > 0 && (chatBtn.first().textContent().contains("立即沟通"))) {
-                foundChatBtn = true;
-                break;
+            if (chatBtn.count() > 0) {
+                try {
+                    chatBtnText = chatBtn.first().textContent();
+                } catch (Exception ignore) {
+                    chatBtnText = "";
+                }
+                if (chatBtnText != null && !chatBtnText.isBlank()) {
+                    foundChatBtn = true;
+                    break;
+                }
             }
             PlaywrightUtil.sleep(1);
         }
         if (!foundChatBtn) {
-            log.warn("未找到立即沟通按钮，跳过岗位: {}", job.getJobName());
-            // 关闭详情页
+            log.warn("未找到沟通按钮，跳过岗位: {}", job.getJobName());
             try {
                 detailPage.close();
             } catch (Exception ignore) {
             }
+            markBossDeliveryStatus(detailUrl, DeliveryStatuses.FAILED);
             return;
         }
+
+        if (DeliveryStatuses.isAlreadyChattedButton(chatBtnText)) {
+            log.info("已沟通过（按钮「{}」），标记已投递并跳过 | 公司：{} | 岗位：{}",
+                    chatBtnText.trim(), job.getCompanyName(), job.getJobName());
+            try {
+                detailPage.close();
+            } catch (Exception ignore) {
+            }
+            markBossDeliveryStatus(detailUrl, DeliveryStatuses.DELIVERED);
+            return;
+        }
+
+        if (!DeliveryStatuses.isFreshChatButton(chatBtnText)) {
+            log.warn("沟通按钮文案未识别「{}」，跳过岗位: {}", chatBtnText, job.getJobName());
+            try {
+                detailPage.close();
+            } catch (Exception ignore) {
+            }
+            markBossDeliveryStatus(detailUrl, DeliveryStatuses.FAILED);
+            return;
+        }
+
         chatBtn.first().click();
         PlaywrightUtil.sleep(1);
 
@@ -663,6 +723,7 @@ public class Boss {
                 detailPage.close();
             } catch (Exception ignore) {
             }
+            markBossDeliveryStatus(detailUrl, DeliveryStatuses.FAILED);
             return;
         }
 
@@ -702,32 +763,26 @@ public class Boss {
 
         // 8. 更新数据库投递状态 & 成功投递加入结果
         if (sendSuccess) {
-            // 从详情链接提取 encrypt_id，并映射到 encrypt_user_id
-            String encryptId = extractEncryptId(detailUrl);
-            String encryptUserId = encryptId != null ? encryptIdToUserId.get(encryptId) : null;
-            if (encryptId != null && encryptUserId != null) {
-                try {
-        bossService.updateDeliveryStatus(encryptId, encryptUserId, "已投递");
-                    log.info("投递成功 | 公司：{} | 岗位：{} | encryptId：{} | encryptUserId：{}", job.getCompanyName(), job.getJobName(), encryptId, encryptUserId);
-                } catch (Exception e) {
-                    log.warn("更新投递状态为已投递失败：{}", e.getMessage());
-                }
-            } else {
-                log.debug("未能找到 encryptId/encryptUserId 用于更新投递状态，detailUrl: {}", detailUrl);
-            }
+            markBossDeliveryStatus(detailUrl, DeliveryStatuses.DELIVERED);
             resultList.add(job);
+            log.info("投递成功 | 公司：{} | 岗位：{}", job.getCompanyName(), job.getJobName());
         } else {
-            // 若发生发送失败，也进行状态更新
-            String encryptId = extractEncryptId(detailUrl);
-            String encryptUserId = encryptId != null ? encryptIdToUserId.get(encryptId) : null;
-            if (encryptId != null && encryptUserId != null) {
-                try {
-        bossService.updateDeliveryStatus(encryptId, encryptUserId, "投递失败");
-                    log.warn("投递失败 | 公司：{} | 岗位：{} | encryptId：{} | encryptUserId：{}", job.getCompanyName(), job.getJobName(), encryptId, encryptUserId);
-                } catch (Exception e) {
-                    log.warn("更新投递状态为投递失败异常：{}", e.getMessage());
-                }
-            }
+            markBossDeliveryStatus(detailUrl, DeliveryStatuses.FAILED);
+            log.warn("投递失败 | 公司：{} | 岗位：{}", job.getCompanyName(), job.getJobName());
+        }
+    }
+
+    private void markBossDeliveryStatus(String detailUrl, String status) {
+        String encryptId = extractEncryptId(detailUrl);
+        String encryptUserId = encryptId != null ? encryptIdToUserId.get(encryptId) : null;
+        if (encryptId == null) {
+            log.debug("未能找到 encryptId 用于更新投递状态，detailUrl: {}", detailUrl);
+            return;
+        }
+        try {
+            bossService.updateDeliveryStatus(encryptId, encryptUserId, status);
+        } catch (Exception e) {
+            log.warn("更新投递状态为「{}」失败：{}", status, e.getMessage());
         }
     }
 

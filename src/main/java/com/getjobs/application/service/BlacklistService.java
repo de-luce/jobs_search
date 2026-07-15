@@ -13,6 +13,7 @@ import java.sql.Connection;
 import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -20,12 +21,14 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static com.getjobs.application.entity.table.BlacklistTableDef.BLACKLIST;
 
 /**
- * 全局公司黑名单：公司名包含任一黑名单词条（LIKE）则跳过投递。
+ * 全局公司黑名单：规范化后做子串双向匹配（忽略大小写/空白/常见括号，并弱化「有限公司」等后缀差异）。
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class BlacklistService {
+
+    private static final int MIN_BIDIRECTIONAL_LEN = 2;
 
     private final BlacklistMapper blacklistMapper;
     private final DataSource dataSource;
@@ -127,29 +130,144 @@ public class BlacklistService {
     }
 
     /**
-     * 公司名是否命中黑名单（子串匹配，等同 SQL LIKE '%value%'）。
+     * 公司名是否命中黑名单。
      */
     public boolean isCompanyBlacklisted(String companyName) {
         return findMatchedCompany(companyName) != null;
     }
 
     /**
+     * 任一候选公司名命中即返回词条；用于同一岗位同时有品牌名/全称等字段。
+     */
+    public String findMatchedCompanyAny(Collection<String> companyNames) {
+        if (companyNames == null || companyNames.isEmpty()) {
+            return null;
+        }
+        for (String name : companyNames) {
+            String matched = findMatchedCompany(name);
+            if (matched != null) {
+                return matched;
+            }
+        }
+        return null;
+    }
+
+    public String findMatchedCompanyAny(String... companyNames) {
+        if (companyNames == null || companyNames.length == 0) {
+            return null;
+        }
+        for (String name : companyNames) {
+            String matched = findMatchedCompany(name);
+            if (matched != null) {
+                return matched;
+            }
+        }
+        return null;
+    }
+
+    /**
      * 返回命中的黑名单词条；未命中返回 null。
+     * 占位文案（未知公司/公司）不参与匹配，避免假阴性被当成真公司。
      */
     public String findMatchedCompany(String companyName) {
-        if (companyName == null || companyName.isBlank()) {
+        if (companyName == null || companyName.isBlank() || isPlaceholderCompany(companyName)) {
             return null;
         }
         if (companyCache.isEmpty()) {
             return null;
         }
-        String name = companyName.trim().toLowerCase(Locale.ROOT);
+        String nameNorm = normalizeCompany(companyName);
+        if (nameNorm.isEmpty()) {
+            return null;
+        }
+        String nameCore = stripLegalSuffix(nameNorm);
         for (String entry : companyCache) {
-            if (entry != null && !entry.isBlank()
-                    && name.contains(entry.trim().toLowerCase(Locale.ROOT))) {
+            if (entry == null || entry.isBlank()) {
+                continue;
+            }
+            String entryNorm = normalizeCompany(entry);
+            if (entryNorm.isEmpty()) {
+                continue;
+            }
+            String entryCore = stripLegalSuffix(entryNorm);
+            if (matchesNormalized(nameNorm, entryNorm) || matchesNormalized(nameCore, entryCore)) {
                 return entry;
             }
         }
         return null;
+    }
+
+    /** 无法用于黑名单校验的占位文案 */
+    public static boolean isPlaceholderCompany(String companyName) {
+        if (companyName == null || companyName.isBlank()) {
+            return true;
+        }
+        String t = companyName.trim();
+        return "公司".equals(t)
+                || "未知公司".equals(t)
+                || "未知".equals(t)
+                || "-".equals(t)
+                || "—".equals(t);
+    }
+
+    /**
+     * 规范化：小写、去空白、统一括号/标点；便于 DOM 换行名与配置关键词对齐。
+     */
+    static String normalizeCompany(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String s = raw.toLowerCase(Locale.ROOT)
+                .replace('\u00a0', ' ')
+                .replaceAll("\\s+", "")
+                .replace('（', '(')
+                .replace('）', ')')
+                .replace('【', '[')
+                .replace('】', ']')
+                .replace('「', '[')
+                .replace('」', ']')
+                .replace("・", "")
+                .replace("·", "")
+                .replace(".", "")
+                .replace("。", "")
+                .replace(",", "")
+                .replace("，", "");
+        return s;
+    }
+
+    /** 去掉常见法律后缀，降低「腾讯」vs「腾讯科技有限公司」漏匹配 */
+    static String stripLegalSuffix(String normalized) {
+        if (normalized == null || normalized.isEmpty()) {
+            return "";
+        }
+        String s = normalized;
+        String[] suffixes = {
+                "股份有限公司", "有限责任公司", "有限公司", "集团有限公司",
+                "集团", "公司", "株式会社", "inc", "ltd", "co", "corp", "llc"
+        };
+        boolean changed;
+        do {
+            changed = false;
+            for (String suffix : suffixes) {
+                if (s.endsWith(suffix) && s.length() > suffix.length() + 1) {
+                    s = s.substring(0, s.length() - suffix.length());
+                    changed = true;
+                }
+            }
+        } while (changed);
+        return s;
+    }
+
+    private static boolean matchesNormalized(String name, String entry) {
+        if (name.isEmpty() || entry.isEmpty()) {
+            return false;
+        }
+        if (name.contains(entry)) {
+            return true;
+        }
+        // 词条更长时（用户填了全称、页面只有品牌名）允许反向包含，但要求双方不太短
+        return entry.length() >= MIN_BIDIRECTIONAL_LEN
+                && name.length() >= MIN_BIDIRECTIONAL_LEN
+                && entry.contains(name);
     }
 }

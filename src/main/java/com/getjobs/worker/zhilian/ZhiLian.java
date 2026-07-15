@@ -3,6 +3,7 @@ package com.getjobs.worker.zhilian;
 import com.getjobs.application.entity.ZhilianJobDataEntity;
 import com.getjobs.application.service.BlacklistService;
 import com.getjobs.application.service.ZhilianService;
+import com.getjobs.application.utils.DeliveryStatuses;
 import com.getjobs.worker.utils.Job;
 import com.getjobs.worker.utils.JobUtils;
 import com.getjobs.worker.utils.PlaywrightUtil;
@@ -43,7 +44,9 @@ public class ZhiLian {
 
     private final List<Job> resultList = new ArrayList<>();
     private boolean isLimit = false;
-    private int maxPage = 500;
+    private static final int DEFAULT_MAX_PAGE = 50;
+
+    private int maxPage = DEFAULT_MAX_PAGE;
 
     private static final String HOME_URL = "https://www.zhaopin.com/sou/";
     /** 当前关键词搜索页 URL，投递后若主页面跳走则用于恢复 */
@@ -167,16 +170,16 @@ public class ZhiLian {
                 return;
             }
 
-            // 遍历所有页面：仅以“下一页”按钮禁用状态为主，最多50页
+            // 遍历所有页面：仅以“下一页”按钮禁用状态为主，最多 DEFAULT_MAX_PAGE 页
             int pageNum = 1;
-            while (pageNum <= 50) {
+            while (pageNum <= maxPage) {
                 if (shouldStop() || isLimit) {
                     sendProgress("用户取消投递或已达上限", null, null);
                     return;
                 }
 
                 log.info("开始投递【{}】关键词，第【{}】页...", keyword, pageNum);
-                sendProgress(String.format("正在投递第%d页", pageNum), pageNum, 50);
+                sendProgress(String.format("正在投递第%d页", pageNum), pageNum, maxPage);
 
                 // 等待岗位列表出现（CSS选择器）
                 try {
@@ -282,7 +285,8 @@ public class ZhiLian {
                             entity.setExperience(experience);
                             entity.setDegree(degree);
                             entity.setCompanyName(companyName);
-                            entity.setDeliveryStatus(blacklistService.isCompanyBlacklisted(companyName) ? "已过滤" : "未投递");
+                            entity.setDeliveryStatus(blacklistService.isCompanyBlacklisted(companyName)
+                                    ? DeliveryStatuses.FILTERED : DeliveryStatuses.PENDING);
                             toInsert.add(entity);
                         }
                     }
@@ -311,6 +315,11 @@ public class ZhiLian {
                     return false;
                 }
 
+                if (BlacklistService.isPlaceholderCompany(pj.companyName)) {
+                    log.info("无法获取公司名，跳过投递（避免黑名单漏拦）| 岗位：{}", pj.jobTitle);
+                    continue;
+                }
+
                 String matchedBlacklist = blacklistService.findMatchedCompany(pj.companyName);
                 if (matchedBlacklist != null) {
                     log.info("被过滤：公司名命中全局黑名单「{}」 | 公司：{} | 岗位：{}", matchedBlacklist, pj.companyName, pj.jobTitle);
@@ -321,6 +330,25 @@ public class ZhiLian {
                 Locator applyBtn = card.locator("button.collect-and-apply__btn");
                 if (applyBtn.count() == 0) {
                     log.info("岗位【{}】未找到立即投递按钮，跳过", pj.jobTitle);
+                    continue;
+                }
+                String applyText = "";
+                try {
+                    applyText = applyBtn.first().textContent();
+                } catch (Exception ignore) {
+                }
+                if (DeliveryStatuses.isAlreadyChattedButton(applyText)) {
+                    try {
+                        if (pj.jobId != null && !pj.jobId.isEmpty()) {
+                            zhilianService.markDeliveredByJobId(pj.jobId);
+                        } else if (pj.jobTitle != null && pj.companyName != null) {
+                            zhilianService.markDeliveredByTitleAndCompany(pj.jobTitle, pj.companyName);
+                        }
+                        log.info("已申请过（按钮「{}」），标记已投递并跳过 | 公司：{} | 岗位：{}",
+                                applyText != null ? applyText.trim() : "", pj.companyName, pj.jobTitle);
+                    } catch (Exception ex) {
+                        log.warn("更新投递状态失败: {}", ex.getMessage());
+                    }
                     continue;
                 }
                 try {
@@ -419,18 +447,10 @@ public class ZhiLian {
     }
 
     /**
-     * 投递相似职位
+     * 投递相似职位（跳过黑名单公司）
      */
     private void deliverSimilarJobs(Page dialogPage) {
         try {
-            // 全选相似职位
-            Locator selectAllCheckbox = dialogPage.locator("div.applied-select-all input");
-            if (selectAllCheckbox.count() > 0 && !selectAllCheckbox.isChecked()) {
-                selectAllCheckbox.click();
-                PlaywrightUtil.sleep(1);
-            }
-
-            // 获取相似职位列表
             Locator jobs = dialogPage.locator("div.recommend-job");
             int jobCount = jobs.count();
 
@@ -439,7 +459,14 @@ public class ZhiLian {
                 return;
             }
 
-            // 记录相似职位信息
+            int selectable = 0;
+            // 先取消全选，再逐个勾选非黑名单岗位
+            Locator selectAllCheckbox = dialogPage.locator("div.applied-select-all input");
+            if (selectAllCheckbox.count() > 0 && selectAllCheckbox.isChecked()) {
+                selectAllCheckbox.click();
+                PlaywrightUtil.sleep(1);
+            }
+
             for (int i = 0; i < jobCount; i++) {
                 try {
                     Locator jobElement = jobs.nth(i);
@@ -449,6 +476,24 @@ public class ZhiLian {
                     String education = safeGetText(jobElement, "span.recommend-job__demand__educational").replace("\n", " ");
                     String companyName = safeGetText(jobElement, ".recommend-job__cname");
                     String companyTag = safeGetText(jobElement, ".recommend-job__demand__cinfo").replace("\n", " ");
+
+                    if (BlacklistService.isPlaceholderCompany(companyName)) {
+                        log.info("相似职位无法获取公司名，跳过勾选（避免黑名单漏拦）| 岗位：{}", jobName);
+                        continue;
+                    }
+
+                    String matchedBlacklist = blacklistService.findMatchedCompany(companyName);
+                    if (matchedBlacklist != null) {
+                        log.info("相似职位被过滤：公司名命中全局黑名单「{}」 | 公司：{} | 岗位：{}",
+                                matchedBlacklist, companyName, jobName);
+                        continue;
+                    }
+
+                    Locator itemCheckbox = jobElement.locator("input[type='checkbox']");
+                    if (itemCheckbox.count() > 0 && !itemCheckbox.first().isChecked()) {
+                        itemCheckbox.first().click();
+                        PlaywrightUtil.sleepMillis(200);
+                    }
 
                     Job job = new Job();
                     job.setJobName(jobName);
@@ -460,17 +505,22 @@ public class ZhiLian {
                     log.info("投递【{}】公司【{}】岗位，薪资【{}】，要求【{}·{}】，规模【{}】",
                         companyName, jobName, salary, years, education, companyTag);
                     resultList.add(job);
+                    selectable++;
                 } catch (Exception e) {
                     log.debug("记录相似职位信息失败: {}", e.getMessage());
                 }
             }
 
-            // 点击投递按钮
+            if (selectable == 0) {
+                log.info("相似职位均被黑名单过滤或无可选项");
+                return;
+            }
+
             Locator postButton = dialogPage.locator("div.applied-select-all button");
             if (postButton.count() > 0) {
                 postButton.click();
                 PlaywrightUtil.sleep(2);
-                log.info("相似职位投递成功！");
+                log.info("相似职位投递成功！共 {} 个", selectable);
             }
 
         } catch (Exception e) {
@@ -500,11 +550,10 @@ public class ZhiLian {
     }
 
     /**
-     * 设置最大页数（已废弃：使用“下一页不可点击”+最多50页）
+     * 已废弃：页数上限使用 {@link #DEFAULT_MAX_PAGE}，并以下一页禁用结束。
      */
     private void setMaxPages() {
-        // 保留方法避免旧调用报错，但不再依赖输入框改页码
-        maxPage = 50;
+        maxPage = DEFAULT_MAX_PAGE;
     }
 
     /**
@@ -592,7 +641,7 @@ public class ZhiLian {
                 }
                 String text = element.textContent();
                 if (text != null && !text.isBlank()) {
-                    return text.trim();
+                    return text.replace('\u00a0', ' ').replaceAll("\\s+", " ").trim();
                 }
             } catch (Exception ignored) {}
         }

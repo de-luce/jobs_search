@@ -178,6 +178,27 @@ public class LiepinService {
     }
 
     /**
+     * 标记岗位为投递失败。仅当当前为未投递时更新，避免覆盖已投递/已过滤。
+     */
+    public void markFailed(Long jobId) {
+        if (jobId == null) return;
+        try {
+            LiepinEntity existing = liepinMapper.selectOneById(jobId);
+            if (existing == null) return;
+            String status = DeliveryStatuses.normalize(existing.getDeliveryStatus());
+            if (DeliveryStatuses.DELIVERED.equals(status) || DeliveryStatuses.FILTERED.equals(status)) return;
+            LiepinEntity update = new LiepinEntity();
+            update.setJobId(jobId);
+            update.setDeliveryStatus(DeliveryStatuses.FAILED);
+            update.setCreateTime(existing.getCreateTime());
+            update.setUpdateTime(LocalDateTime.now());
+            liepinMapper.update(update);
+        } catch (Exception e) {
+            log.warn("更新投递失败状态失败 job_id={}: {}", jobId, e.getMessage());
+        }
+    }
+
+    /**
      * 标记岗位为已过滤。仅当当前为未投递时更新，避免覆盖已投递。
      */
     public void markFiltered(Long jobId) {

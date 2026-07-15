@@ -428,7 +428,10 @@ public class Job51Service {
 
                 // 公司维度
                 e.setCompId(readLong(item.path("ctmId"), item.path("companyId")));
-                e.setCompName(readText(item, "fullCompanyName", "companyName", "ctmName"));
+                String fullCompanyName = readText(item, "fullCompanyName");
+                String companyName = readText(item, "companyName");
+                String ctmName = readText(item, "ctmName");
+                e.setCompName(firstNonBlank(fullCompanyName, companyName, ctmName));
                 e.setCompIndustry(readText(item, "industryType1Str", "industry", "compIndustry"));
                 e.setCompScale(readText(item, "companySizeString", "companySize", "compScale"));
 
@@ -444,7 +447,7 @@ public class Job51Service {
                 }
                 e.setJobLink(jobHref);
 
-                if (blacklistService.isCompanyBlacklisted(e.getCompName())) {
+                if (blacklistService.findMatchedCompanyAny(fullCompanyName, companyName, ctmName) != null) {
                     e.setDeliveryStatus(DeliveryStatuses.FILTERED);
                 } else {
                     e.setDeliveryStatus(DeliveryStatuses.PENDING);
@@ -460,6 +463,14 @@ public class Job51Service {
     }
 
     // 读取辅助
+    private static String firstNonBlank(String... values) {
+        if (values == null) return null;
+        for (String v : values) {
+            if (v != null && !v.isBlank()) return v;
+        }
+        return null;
+    }
+
     private static String readText(com.fasterxml.jackson.databind.JsonNode item, String... keys) {
         for (String k : keys) {
             String v = safeText(item.path(k));

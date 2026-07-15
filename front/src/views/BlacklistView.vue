@@ -114,7 +114,7 @@ function onEnterAdd(e: KeyboardEvent) {
 
 <template>
   <div class="space-y-6">
-    <PageHeader title="全局黑名单" subtitle="公司名包含词条则跳过投递（全平台生效）" accent-bg-class="bg-slate-700">
+    <PageHeader title="全局黑名单" subtitle="公司名匹配词条则跳过投递（全平台生效，忽略大小写/空白/有限公司等后缀）" accent-bg-class="bg-slate-700">
       <template #icon>
         <AppIcon icon="bi:slash-circle" :size="20" class="text-white" />
       </template>
@@ -127,7 +127,7 @@ function onEnterAdd(e: KeyboardEvent) {
           公司名称黑名单
         </CardTitle>
         <CardDescription>
-          投递前若岗位公司名包含任一关键词（不区分大小写），则跳过该岗位。例如填写「外包」可过滤「XX科技外包服务」等。
+          投递前若岗位公司名与任一关键词匹配（忽略大小写、空白与「有限公司」等后缀，支持简称↔全称），则跳过该岗位。建议填品牌关键词，例如「外包」「字节」。
         </CardDescription>
       </CardHeader>
       <CardContent class="space-y-4">

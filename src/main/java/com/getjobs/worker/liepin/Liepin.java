@@ -4,6 +4,7 @@ import com.getjobs.worker.utils.PlaywrightUtil;
 import com.getjobs.application.service.BlacklistService;
 import com.getjobs.application.service.LiepinService;
 import com.getjobs.application.entity.LiepinEntity;
+import com.getjobs.application.utils.DeliveryStatuses;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.Locator;
@@ -43,7 +44,9 @@ public class Liepin {
         System.setProperty("log.name", "liepin");
     }
 
-    private int maxPage = 50;
+    private static final int DEFAULT_MAX_PAGE = 50;
+
+    private int maxPage = DEFAULT_MAX_PAGE;
     private final List<String> resultList = new ArrayList<>();
     private final List<LiepinEntity> lastApiEntities = new ArrayList<>();
     /** 共享 Page 只注册一次网络监听，避免 prototype Bean 重复挂载 */
@@ -254,9 +257,9 @@ public class Liepin {
         
         // 等待分页元素加载
         page.waitForSelector(PAGINATION_BOX, new Page.WaitForSelectorOptions().setTimeout(10000));
-        Locator paginationBox = page.locator(PAGINATION_BOX);
-        Locator lis = paginationBox.locator("li");
-        setMaxPage(lis);
+        // 不再用分页栏可见页码当总页数（AntD 常只显示窗口页如 1..7，会误把 max 设成 7）
+        maxPage = DEFAULT_MAX_PAGE;
+        info(String.format("猎聘翻页上限 %d 页（以「下一页可点」为准提前结束）", maxPage));
         
         for (int i = 0; i < maxPage; i++) {
             if (shouldStop()) {
@@ -272,44 +275,58 @@ public class Liepin {
             } catch (Exception ignored) {
             }
             
-        // 等待岗位卡片挂载（不要求可见，避免因遮挡造成超时）
-        page.waitForSelector(
-            JOB_CARDS,
-            new Page.WaitForSelectorOptions()
-                .setState(WaitForSelectorState.ATTACHED)
-                .setTimeout(15000)
-        );
-            // 额外等待一次接口响应，确保 lastApiEntities 刷新（精确匹配PC搜索接口）
-            try {
-                page.waitForResponse(r -> {
-                    try {
-                        String u = r.url();
-                        return u != null && u.contains("com.liepin.searchfront4c.pc-search-job") && r.status() == 200;
-                    } catch (Exception ignored) { return false; }
-                }, () -> {});
-            } catch (Exception ignored) {}
+            // 等待岗位卡片挂载（不要求可见，避免因遮挡造成超时）
+            page.waitForSelector(
+                JOB_CARDS,
+                new Page.WaitForSelectorOptions()
+                    .setState(WaitForSelectorState.ATTACHED)
+                    .setTimeout(15000)
+            );
             info(String.format("正在投递【%s】第【%d】页...", cleanKeyword, i + 1));
             submitJob();
             info(String.format("已投递第【%d】页所有的岗位...", i + 1));
             
             // 查找下一页按钮（AntD v5 结构）
-            paginationBox = page.locator(PAGINATION_BOX);
+            Locator paginationBox = page.locator(PAGINATION_BOX);
             Locator nextLi = paginationBox.locator(NEXT_PAGE);
-            if (nextLi.count() > 0) {
-                String cls = nextLi.first().getAttribute("class");
-                boolean disabled = cls != null && cls.contains("ant-pagination-disabled");
-                if (!disabled) {
+            if (nextLi.count() == 0) {
+                break;
+            }
+            String cls = nextLi.first().getAttribute("class");
+            boolean disabled = cls != null && cls.contains("ant-pagination-disabled");
+            if (disabled) {
+                break;
+            }
+            try {
+                page.waitForResponse(r -> {
+                    try {
+                        String u = r.url();
+                        return u != null && u.contains("com.liepin.searchfront4c.pc-search-job") && r.status() == 200;
+                    } catch (Exception ignored) {
+                        return false;
+                    }
+                }, () -> {
                     Locator btn = nextLi.first().locator("button.ant-pagination-item-link");
                     if (btn.count() > 0) {
                         btn.first().click();
                     } else {
                         nextLi.first().click();
                     }
-                } else {
+                });
+            } catch (Exception e) {
+                log.warn("翻到下一页或等待搜索接口超时: {}", e.getMessage());
+                try {
+                    Locator btn = nextLi.first().locator("button.ant-pagination-item-link");
+                    if (btn.count() > 0) {
+                        btn.first().click();
+                    } else {
+                        nextLi.first().click();
+                    }
+                    PlaywrightUtil.sleep(2);
+                } catch (Exception clickEx) {
+                    log.warn("点击下一页失败，结束翻页: {}", clickEx.getMessage());
                     break;
                 }
-            } else {
-                break;
             }
         }
         info(String.format("【%s】关键词投递完成！", cleanKeyword));
@@ -349,20 +366,6 @@ public class Liepin {
         return value == null ? "" : value;
     }
 
-    private void setMaxPage(Locator lis) {
-        try {
-            int count = lis.count();
-            if (count >= 2) {
-                String pageText = lis.nth(count - 2).textContent();
-                int page = Integer.parseInt(pageText);
-                if (page > 1) {
-                    maxPage = page;
-                }
-            }
-        } catch (Exception ignored) {
-        }
-    }
-
     private void submitJob() {
         // 获取hr数量
         Locator jobCards = page.locator(JOB_CARDS);
@@ -389,10 +392,20 @@ public class Liepin {
             }
             if (recruiterName == null) recruiterName = "HR";
             if (jobName == null) jobName = "岗位";
-            if (companyName == null) companyName = "公司";
             if (salary == null) salary = "";
+            // 缺公司名时不要投递，避免黑名单漏拦
+            String companyForMatch = companyName;
+            if (companyName == null || companyName.isBlank()) {
+                companyName = "未知公司";
+                companyForMatch = null;
+            }
 
-            String matchedBlacklist = blacklistService.findMatchedCompany(companyName);
+            if (BlacklistService.isPlaceholderCompany(companyForMatch)) {
+                log.info("无法获取公司名，跳过投递（避免黑名单漏拦）| 岗位：{}", jobName);
+                continue;
+            }
+
+            String matchedBlacklist = blacklistService.findMatchedCompany(companyForMatch);
             if (matchedBlacklist != null) {
                 log.info("被过滤：公司名命中全局黑名单「{}」 | 公司：{} | 岗位：{}", matchedBlacklist, companyName, jobName);
                 if (i < lastApiEntities.size() && lastApiEntities.get(i) != null) {
@@ -489,61 +502,56 @@ public class Liepin {
                 continue;
             }
             
-            // 查找聊一聊按钮
+            // 查找聊一聊 / 继续聊 按钮（优先命中目标文案，避免被其它 button 覆盖）
             Locator button = null;
             String buttonText = "";
             try {
-                // 在当前岗位卡片中查找按钮，尝试多种选择器
-                
                 String[] buttonSelectors = {
-                    "button.ant-btn.ant-btn-primary.ant-btn-round",
-                    "button.ant-btn.ant-btn-round.ant-btn-primary", 
-                    "button[class*='ant-btn'][class*='primary']",
-                    "button[class*='ant-btn'][class*='round']",
-                    "button[class*='chat'], button[class*='talk']",
-                    ".chat-btn, .talk-btn, .contact-btn",
                     "button:has-text('聊一聊')",
-                    "button" // 最后尝试所有按钮
+                    "button:has-text('继续聊')",
+                    "button.ant-btn.ant-btn-primary.ant-btn-round",
+                    "button.ant-btn.ant-btn-round.ant-btn-primary",
+                    "button[class*='ant-btn'][class*='primary']",
+                    "button[class*='chat'], button[class*='talk']",
+                    ".chat-btn, .talk-btn, .contact-btn"
                 };
-                
+
                 for (String selector : buttonSelectors) {
                     try {
                         Locator tempButtons = currentJobCard.locator(selector);
                         int buttonCount = tempButtons.count();
-                        log.debug("选择器 '{}' 找到 {} 个按钮", selector, buttonCount);
-                        
                         for (int j = 0; j < buttonCount; j++) {
                             Locator tempButton = tempButtons.nth(j);
                             try {
-                                if (tempButton.isVisible()) {
-                                    String text = tempButton.textContent();
-                                    log.debug("按钮文本: '{}'", text);
-                                    if (text != null && !text.trim().isEmpty()) {
-                                        button = tempButton;
-                                        buttonText = text.trim();
-                                        // 只关注"聊一聊"按钮
-                                        if (text.contains("聊一聊")) {
-                                            log.debug("找到目标按钮: '{}'", text);
-                                            break;
-                                        }
-                                    }
+                                if (!tempButton.isVisible()) {
+                                    continue;
+                                }
+                                String text = tempButton.textContent();
+                                if (text == null || text.trim().isEmpty()) {
+                                    continue;
+                                }
+                                String trimmed = text.trim();
+                                if (DeliveryStatuses.isFreshChatButton(trimmed)
+                                        || DeliveryStatuses.isAlreadyChattedButton(trimmed)) {
+                                    button = tempButton;
+                                    buttonText = trimmed;
+                                    break;
                                 }
                             } catch (Exception ignore) {
                                 log.debug("获取按钮文本失败: {}", ignore.getMessage());
                             }
                         }
-                        
-                        if (button != null && buttonText.contains("聊一聊")) {
+                        if (button != null && (DeliveryStatuses.isFreshChatButton(buttonText)
+                                || DeliveryStatuses.isAlreadyChattedButton(buttonText))) {
                             break;
                         }
                     } catch (Exception e) {
                         log.debug("选择器 '{}' 查找失败: {}", selector, e.getMessage());
                     }
                 }
-                
+
             } catch (Exception e) {
                 log.error("查找按钮失败: {}", e.getMessage());
-                // 不再保存页面源码
                 continue;
             }
             
@@ -557,7 +565,7 @@ public class Liepin {
             }
 
             // 检查按钮文本并点击
-            if (button != null && buttonText.contains("聊一聊")) {
+            if (button != null && DeliveryStatuses.isFreshChatButton(buttonText)) {
                 try {
                     // 在点击按钮前进行鼠标微调，先向右移动2像素，再向左移动2像素
                     try {
@@ -589,7 +597,6 @@ public class Liepin {
                     }
                     
                     button.click();
-                    // PlaywrightUtil.sleep(1); // 等待点击响应
                     
                     // 猎聘会自动发送打招呼语，所以我们只需要关闭聊天窗口
                     try {
@@ -622,16 +629,20 @@ public class Liepin {
                     
                 } catch (Exception e) {
                     log.error("点击按钮失败: {}", e.getMessage());
+                    if (jobIdForUpdate != null) {
+                        try { liepinService.markFailed(jobIdForUpdate); } catch (Exception ignore) {}
+                    }
                 }
-            } else {
-                // 如果按钮是“继续聊”，视为已投递
-                if (button != null && buttonText.contains("继续聊") && jobIdForUpdate != null) {
+            } else if (button != null && DeliveryStatuses.isAlreadyChattedButton(buttonText)) {
+                if (jobIdForUpdate != null) {
                     liepinService.markDelivered(jobIdForUpdate);
                 }
-                if (button != null) {
-                    log.debug("跳过岗位（按钮文本不匹配）: 【{}】的【{}·{}】岗位，按钮文本: '{}'", companyName, jobName, salary, buttonText);
-                } else {
-                    // 不再保存页面源码
+                log.info("已沟通过（按钮「{}」），标记已投递并跳过 | 公司：{} | 岗位：{}", buttonText, companyName, jobName);
+            } else {
+                log.warn("跳过岗位（未找到可投递按钮）: 【{}】的【{}·{}】，按钮: '{}'",
+                        companyName, jobName, salary, buttonText);
+                if (jobIdForUpdate != null) {
+                    try { liepinService.markFailed(jobIdForUpdate); } catch (Exception ignore) {}
                 }
             }
         }
