@@ -9,6 +9,7 @@ import com.getjobs.application.mapper.BossConfigMapper;
 import com.getjobs.application.mapper.BossIndustryMapper;
 import com.getjobs.application.mapper.BossOptionMapper;
 import com.getjobs.application.utils.SalaryParseUtil;
+import com.getjobs.application.utils.DeliveryStatuses;
 import com.getjobs.worker.boss.BossConfig;
 import com.mybatisflex.core.query.QueryChain;
 import com.mybatisflex.core.query.QueryWrapper;
@@ -531,6 +532,18 @@ public class BossService {
             update.and(BOSS_JOB_DATA.ENCRYPT_USER_ID.eq(encryptUserId));
         }
         update.update();
+    }
+
+    /**
+     * 按主键人工修改投递状态。
+     */
+    public boolean updateDeliveryStatusById(Long id, String status) {
+        if (id == null || !DeliveryStatuses.isKnown(status)) return false;
+        return UpdateChain.of(bossJobDataMapper)
+                .set(BOSS_JOB_DATA.DELIVERY_STATUS, status.trim())
+                .set(BOSS_JOB_DATA.UPDATED_AT, LocalDateTime.now())
+                .where(BOSS_JOB_DATA.ID.eq(id))
+                .update();
     }
 
     // ==================== 投递分析（Dashboard）相关方法 ====================

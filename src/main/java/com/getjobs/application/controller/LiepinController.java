@@ -291,6 +291,22 @@ public class LiepinController {
     }
 
     /**
+     * 人工修改投递状态
+     */
+    @PutMapping("/jobs/{jobId}/delivery-status")
+    public Map<String, Object> updateDeliveryStatus(
+            @PathVariable("jobId") Long jobId,
+            @RequestBody Map<String, String> body
+    ) {
+        String status = body != null ? body.get("status") : null;
+        boolean ok = liepinService.updateDeliveryStatus(jobId, status);
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("success", ok);
+        resp.put("message", ok ? "更新成功" : "更新失败（记录不存在或状态无效）");
+        return resp;
+    }
+
+    /**
      * 调试接口：读取数据库中的猎聘 Cookie 记录
      */
     @GetMapping("/cookie")

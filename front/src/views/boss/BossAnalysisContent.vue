@@ -237,7 +237,9 @@ const columns: TableColumn<BossJob>[] = [
     key: 'company',
     header: '公司',
     className: 'max-w-[140px] truncate',
+    type: 'company-link',
     accessor: 'companyName',
+    hrefAccessor: 'jobUrl',
   },
   {
     key: 'job',
@@ -276,16 +278,33 @@ const columns: TableColumn<BossJob>[] = [
     type: 'date',
     accessor: 'createdAt',
   },
-  {
-    key: 'link',
-    header: '链接',
-    type: 'link',
-    accessor: 'jobUrl',
-  },
 ]
 
 function onFilterPatch(patch: Partial<AnalysisFilterState>) {
   filter.value = { ...filter.value, ...patch }
+}
+
+async function onStatusChange(row: BossJob, status: string) {
+  if (!row.id || row.deliveryStatus === status) return
+  try {
+    const res = await fetch(`${API}/api/boss/jobs/${row.id}/delivery-status`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    })
+    const data = await res.json()
+    if (!data?.success) {
+      console.error('update boss delivery status failed', data?.message)
+      await loadList(page.value, size.value, { silent: true })
+      return
+    }
+    row.deliveryStatus = status
+    if (detailJob.value?.id === row.id) detailJob.value.deliveryStatus = status
+    await loadStats({ silent: true })
+  } catch (e) {
+    console.error('update boss delivery status failed', e)
+    await loadList(page.value, size.value, { silent: true })
+  }
 }
 
 const detailFields: [string, keyof BossJob][] = [
@@ -347,9 +366,11 @@ const detailFields: [string, keyof BossJob][] = [
       :page="page"
       :size="size"
       :total-pages="totalPages"
+      :status-options="PLATFORM_STATUS_OPTIONS.boss"
       @page-change="loadList($event, size)"
       @size-change="loadList(1, $event)"
       @row-click="detailJob = $event"
+      @status-change="onStatusChange"
     />
 
     <div
@@ -381,15 +402,6 @@ const detailFields: [string, keyof BossJob][] = [
           class="w-full h-32 mt-1 text-sm bg-muted/30"
           :rows="5"
         />
-        <a
-          v-if="detailJob.jobUrl"
-          :href="detailJob.jobUrl"
-          target="_blank"
-          rel="noreferrer"
-          class="inline-block mt-3 text-primary underline text-sm"
-        >
-          打开职位链接
-        </a>
       </div>
     </div>
   </div>

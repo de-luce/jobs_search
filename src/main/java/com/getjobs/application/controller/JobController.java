@@ -510,6 +510,22 @@ public class JobController {
         return job51Service.listJob51(statusList, location, experience, degree, minK, maxK, keyword, page, size);
     }
 
+    /**
+     * 人工修改投递状态
+     */
+    @PutMapping("/51job/jobs/{jobId}/delivery-status")
+    public Map<String, Object> updateJob51DeliveryStatus(
+            @PathVariable("jobId") Long jobId,
+            @RequestBody Map<String, String> body
+    ) {
+        String status = body != null ? body.get("status") : null;
+        boolean ok = job51Service.updateDeliveryStatus(jobId, status);
+        return Map.of(
+                "success", ok,
+                "message", ok ? "更新成功" : "更新失败（记录不存在或状态无效）"
+        );
+    }
+
     /** 刷新 job51_data，返回总数 */
     @GetMapping("/51job/reload")
     public Map<String, Object> reload() { return job51Service.reloadJob51Data(); }

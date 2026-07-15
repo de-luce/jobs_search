@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { Icon } from '@iconify/vue'
+import Button from '@/components/ui/Button.vue'
 import AnalysisPageHeader from '@/components/analysis/AnalysisPageHeader.vue'
 import AnalysisKpiGrid from '@/components/analysis/AnalysisKpiGrid.vue'
 import AnalysisFilterPanel from '@/components/analysis/AnalysisFilterPanel.vue'
@@ -57,6 +58,7 @@ const filter = ref<AnalysisFilterState>({ ...DEFAULT_FILTER })
 const loadingList = ref(false)
 const reloading = ref(false)
 const exporting = ref(false)
+const detailJob = ref<Job51Item | null>(null)
 const salaryUnit = PLATFORM_SALARY_UNIT['51job']
 const locationOptions = ref<AnalysisFilterOption[]>([])
 
@@ -190,16 +192,45 @@ const chartConfigs = computed(() => {
 })
 
 const tableColumns: TableColumn<Job51Item>[] = [
-  { key: 'company', header: '公司', className: 'max-w-[140px] truncate', accessor: (it) => it.companyName || '-' },
+  {
+    key: 'company',
+    header: '公司',
+    className: 'max-w-[140px] truncate',
+    type: 'company-link',
+    accessor: (it) => it.companyName || '-',
+    hrefAccessor: (it) => it.jobUrl || '',
+  },
   { key: 'job', header: '岗位', className: 'max-w-[180px] truncate', accessor: (it) => it.jobName || '-' },
   { key: 'salary', header: '薪资', className: 'whitespace-nowrap', accessor: (it) => it.salary || '-' },
   { key: 'location', header: '地点', className: 'whitespace-nowrap', accessor: (it) => it.location || '-' },
   { key: 'status', header: '状态', type: 'status', accessor: (it) => it.deliveryStatus || '-' },
-  { key: 'link', header: '链接', type: 'link', accessor: (it) => it.jobUrl || '' },
 ]
 
 function onFilterChange(patch: Partial<AnalysisFilterState>) {
   filter.value = { ...filter.value, ...patch }
+}
+
+async function onStatusChange(row: Job51Item, status: string) {
+  if (!row.jobId || row.deliveryStatus === status) return
+  try {
+    const res = await fetch(`${API_BASE}/api/51job/jobs/${row.jobId}/delivery-status`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    })
+    const data = await res.json()
+    if (!data?.success) {
+      console.error('update job51 delivery status failed', data?.message)
+      await loadList(page.value, size.value, { silent: true })
+      return
+    }
+    row.deliveryStatus = status
+    if (detailJob.value?.jobId === row.jobId) detailJob.value.deliveryStatus = status
+    await loadStats({ silent: true })
+  } catch (e) {
+    console.error('update job51 delivery status failed', e)
+    await loadList(page.value, size.value, { silent: true })
+  }
 }
 </script>
 
@@ -243,8 +274,38 @@ function onFilterChange(patch: Partial<AnalysisFilterState>) {
       :page="page"
       :size="size"
       :total-pages="totalPages"
+      :status-options="STATUS_OPTIONS"
       @page-change="(p) => loadList(p, size)"
       @size-change="(s) => loadList(1, s)"
+      @row-click="detailJob = $event"
+      @status-change="onStatusChange"
     />
+
+    <div
+      v-if="detailJob"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      @click="detailJob = null"
+    >
+      <div
+        class="bg-background rounded-lg border shadow-lg w-full max-w-lg p-5"
+        @click.stop
+      >
+        <div class="flex items-start justify-between gap-3 mb-4">
+          <div>
+            <h3 class="font-semibold text-lg">{{ detailJob.jobName || '岗位详情' }}</h3>
+            <p class="text-sm text-muted-foreground">{{ detailJob.companyName }}</p>
+          </div>
+          <Button variant="outline" size="sm" @click="detailJob = null">关闭</Button>
+        </div>
+        <div class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+          <div><span class="text-muted-foreground">薪资：</span>{{ detailJob.salary || '-' }}</div>
+          <div><span class="text-muted-foreground">地点：</span>{{ detailJob.location || '-' }}</div>
+          <div><span class="text-muted-foreground">经验：</span>{{ detailJob.experience || '-' }}</div>
+          <div><span class="text-muted-foreground">学历：</span>{{ detailJob.degree || '-' }}</div>
+          <div><span class="text-muted-foreground">HR：</span>{{ detailJob.hrName || '-' }}</div>
+          <div><span class="text-muted-foreground">状态：</span>{{ detailJob.deliveryStatus || '-' }}</div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>

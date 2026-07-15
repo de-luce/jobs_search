@@ -180,13 +180,19 @@ const kpiItems = computed<KpiItem[]>(() => [
 const chartConfigs = computed(() => buildChartConfigs(stats.value?.charts, 'zhilian'))
 
 const columns: TableColumn<ZhilianJob>[] = [
-  { key: 'company', header: '公司', className: 'max-w-[140px] truncate', accessor: (it) => it.companyName || '-' },
+  {
+    key: 'company',
+    header: '公司',
+    className: 'max-w-[140px] truncate',
+    type: 'company-link',
+    accessor: (it) => it.companyName || '-',
+    hrefAccessor: (it) => it.jobLink || '',
+  },
   { key: 'title', header: '岗位', className: 'max-w-[180px] truncate', accessor: (it) => it.jobTitle || '-' },
   { key: 'salary', header: '薪资', className: 'whitespace-nowrap', accessor: (it) => it.salary || '-' },
   { key: 'location', header: '地点', className: 'whitespace-nowrap', accessor: (it) => it.location || '-' },
   { key: 'status', header: '状态', type: 'status', accessor: (it) => it.deliveryStatus || '-' },
   { key: 'time', header: '时间', className: 'whitespace-nowrap', type: 'date', accessor: (it) => it.createTime },
-  { key: 'link', header: '链接', type: 'link', accessor: (it) => it.jobLink || '' },
 ]
 
 const detailFields = computed(() => {
@@ -204,6 +210,29 @@ const detailFields = computed(() => {
 
 function onFilterChange(patch: Partial<AnalysisFilterState>) {
   filter.value = { ...filter.value, ...patch }
+}
+
+async function onStatusChange(row: ZhilianJob, status: string) {
+  if (!row.jobId || row.deliveryStatus === status) return
+  try {
+    const res = await fetch(`${API}/api/zhilian/jobs/${encodeURIComponent(row.jobId)}/delivery-status`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    })
+    const data = await res.json()
+    if (!data?.success) {
+      console.error('update zhilian delivery status failed', data?.message)
+      await loadList(page.value, size.value, { silent: true })
+      return
+    }
+    row.deliveryStatus = status
+    if (detailJob.value?.jobId === row.jobId) detailJob.value.deliveryStatus = status
+    await loadStats({ silent: true })
+  } catch (e) {
+    console.error('update zhilian delivery status failed', e)
+    await loadList(page.value, size.value, { silent: true })
+  }
 }
 </script>
 
@@ -242,10 +271,11 @@ function onFilterChange(patch: Partial<AnalysisFilterState>) {
       :page="page"
       :size="size"
       :total-pages="totalPages"
-      clickable
+      :status-options="PLATFORM_STATUS_OPTIONS.zhilian"
       @page-change="(p) => loadList(p, size)"
       @size-change="(s) => loadList(1, s)"
       @row-click="detailJob = $event"
+      @status-change="onStatusChange"
     />
 
     <div
@@ -270,15 +300,6 @@ function onFilterChange(patch: Partial<AnalysisFilterState>) {
             {{ v || '-' }}
           </div>
         </div>
-        <a
-          v-if="detailJob.jobLink"
-          :href="detailJob.jobLink"
-          target="_blank"
-          rel="noreferrer"
-          class="text-primary underline text-sm"
-        >
-          打开职位链接
-        </a>
       </div>
     </div>
   </div>

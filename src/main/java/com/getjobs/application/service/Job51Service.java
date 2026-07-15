@@ -514,6 +514,23 @@ public class Job51Service {
         }
     }
 
+    /** 人工修改投递状态 */
+    public boolean updateDeliveryStatus(Long jobId, String status) {
+        if (jobId == null || !DeliveryStatuses.isKnown(status)) return false;
+        try (Connection conn = dataSource.getConnection();
+             java.sql.PreparedStatement ps = conn.prepareStatement(
+                     "UPDATE job51_data SET delivery_status=?, update_time=? WHERE job_id=?")) {
+            java.time.LocalDateTime now = java.time.LocalDateTime.now();
+            ps.setString(1, status.trim());
+            ps.setString(2, now.toString());
+            ps.setLong(3, jobId);
+            return ps.executeUpdate() > 0;
+        } catch (Exception e) {
+            log.warn("更新 51job 投递状态失败 job_id={}: {}", jobId, e.getMessage());
+            return false;
+        }
+    }
+
     /** 标记为已过滤（仅未投递时更新，避免覆盖已投递） */
     public void markFiltered(Long jobId) {
         if (jobId == null) return;

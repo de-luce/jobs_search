@@ -108,4 +108,20 @@ public class BossAnalyticsController {
     public Map<String, Object> reload() {
         return bossService.reloadBossData();
     }
+
+    /**
+     * 人工修改投递状态
+     */
+    @PutMapping("/jobs/{id}/delivery-status")
+    public Map<String, Object> updateDeliveryStatus(
+            @PathVariable("id") Long id,
+            @RequestBody Map<String, String> body
+    ) {
+        String status = body != null ? body.get("status") : null;
+        boolean ok = bossService.updateDeliveryStatusById(id, status);
+        return Map.of(
+                "success", ok,
+                "message", ok ? "更新成功" : "更新失败（记录不存在或状态无效）"
+        );
+    }
 }

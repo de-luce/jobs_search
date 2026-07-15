@@ -14,8 +14,10 @@ export type TableColumn<T> = {
   key: string
   header: string
   className?: string
-  type?: 'text' | 'status' | 'link' | 'date'
+  type?: 'text' | 'status' | 'link' | 'date' | 'company-link'
   accessor?: keyof T | ((row: T) => string | undefined)
+  /** company-link：外链；缺省时展示纯文本 */
+  hrefAccessor?: keyof T | ((row: T) => string | undefined)
 }
 
 withDefaults(
@@ -29,14 +31,17 @@ withDefaults(
     page: number
     size: number
     totalPages: number
+    /** 可编辑投递状态选项；传入后状态列显示为下拉 */
+    statusOptions?: string[]
   }>(),
-  { title: '岗位列表' }
+  { title: '岗位列表', statusOptions: () => [] }
 )
 
 const emit = defineEmits<{
   'page-change': [page: number]
   'size-change': [size: number]
   'row-click': [row: T]
+  'status-change': [row: T, status: string]
 }>()
 
 function getCellValue(row: T, col: TableColumn<T>): string {
@@ -44,6 +49,17 @@ function getCellValue(row: T, col: TableColumn<T>): string {
   if (typeof col.accessor === 'function') return col.accessor(row) || '-'
   const v = row[col.accessor]
   return v != null ? String(v) : '-'
+}
+
+function getHref(row: T, col: TableColumn<T>): string {
+  if (!col.hrefAccessor) return ''
+  if (typeof col.hrefAccessor === 'function') return col.hrefAccessor(row)?.trim() || ''
+  const v = row[col.hrefAccessor]
+  return v != null ? String(v).trim() : ''
+}
+
+function onStatusChange(row: T, value: string) {
+  emit('status-change', row, value)
 }
 </script>
 
@@ -53,7 +69,7 @@ function getCellValue(row: T, col: TableColumn<T>): string {
       <CardTitle class="text-base flex items-center gap-2">
         <Icon icon="bi:briefcase" /> {{ title }}
       </CardTitle>
-      <CardDescription>点击行查看详情，共 {{ total }} 条</CardDescription>
+      <CardDescription>点击行查看详情（状态列除外），共 {{ total }} 条</CardDescription>
     </CardHeader>
     <CardContent>
       <div class="overflow-x-auto max-h-[520px] overflow-y-auto rounded-lg border">
@@ -86,8 +102,39 @@ function getCellValue(row: T, col: TableColumn<T>): string {
                 v-for="col in columns"
                 :key="col.key"
                 :class="['px-3 py-2', col.className || '']"
+                @click="col.type === 'status' ? $event.stopPropagation() : undefined"
               >
-                <span v-if="col.type === 'status'" :class="deliveryStatusClass(getCellValue(row, col))">
+                <template v-if="col.type === 'status'">
+                  <Select
+                    v-if="statusOptions.length"
+                    :model-value="getCellValue(row, col) === '-' ? statusOptions[0] : getCellValue(row, col)"
+                    :class="`h-7 w-[6.5rem] px-1.5 py-0 text-xs shadow-none cursor-pointer ${deliveryStatusClass(getCellValue(row, col))}`"
+                    @update:model-value="onStatusChange(row, $event)"
+                  >
+                    <option v-for="opt in statusOptions" :key="opt" :value="opt">
+                      {{ opt }}
+                    </option>
+                  </Select>
+                  <span v-else :class="deliveryStatusClass(getCellValue(row, col))">
+                    {{ getCellValue(row, col) }}
+                  </span>
+                </template>
+                <a
+                  v-else-if="col.type === 'company-link' && getHref(row, col)"
+                  :href="getHref(row, col)"
+                  target="_blank"
+                  rel="noreferrer"
+                  class="text-primary underline truncate inline-block max-w-full align-bottom"
+                  :title="getCellValue(row, col)"
+                  @click.stop
+                >
+                  {{ getCellValue(row, col) }}
+                </a>
+                <span
+                  v-else-if="col.type === 'company-link'"
+                  class="truncate inline-block max-w-full"
+                  :title="getCellValue(row, col)"
+                >
                   {{ getCellValue(row, col) }}
                 </span>
                 <a

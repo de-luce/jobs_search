@@ -203,7 +203,14 @@ const kpiItems = computed<KpiItem[]>(() => [
 const chartConfigs = computed(() => buildChartConfigs(stats.value?.charts, 'liepin'))
 
 const columns = computed<TableColumn<LiepinJob>[]>(() => [
-  { key: 'compName', header: '公司', className: 'max-w-[160px] truncate', accessor: (it) => it.compName || '-' },
+  {
+    key: 'compName',
+    header: '公司',
+    className: 'max-w-[160px] truncate',
+    type: 'company-link',
+    accessor: (it) => it.compName || '-',
+    hrefAccessor: (it) => it.jobLink || '',
+  },
   { key: 'jobTitle', header: '岗位', className: 'max-w-[200px] truncate', accessor: (it) => it.jobTitle || '-' },
   { key: 'salary', header: '薪资', className: 'whitespace-nowrap', accessor: (it) => it.jobSalaryText || '-' },
   { key: 'city', header: '城市', className: 'whitespace-nowrap', accessor: (it) => it.jobArea || '-' },
@@ -221,6 +228,30 @@ const columns = computed<TableColumn<LiepinJob>[]>(() => [
     accessor: (it) => it.createTime,
   },
 ])
+
+async function onStatusChange(row: LiepinJob, status: string) {
+  const current = liepinDeliveryStatus(row.deliveryStatus)
+  if (!row.jobId || current === status) return
+  try {
+    const res = await fetch(`${API}/api/liepin/jobs/${row.jobId}/delivery-status`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    })
+    const data = await res.json()
+    if (!data?.success) {
+      console.error('update liepin delivery status failed', data?.message)
+      await loadList(page.value, size.value, { silent: true })
+      return
+    }
+    row.deliveryStatus = status
+    if (detailJob.value?.jobId === row.jobId) detailJob.value.deliveryStatus = status
+    await loadStats({ silent: true })
+  } catch (e) {
+    console.error('update liepin delivery status failed', e)
+    await loadList(page.value, size.value, { silent: true })
+  }
+}
 </script>
 
 <template>
@@ -266,9 +297,11 @@ const columns = computed<TableColumn<LiepinJob>[]>(() => [
       :page="page"
       :size="size"
       :total-pages="totalPages"
+      :status-options="PLATFORM_STATUS_OPTIONS.liepin"
       @page-change="(p) => loadList(p, size)"
       @size-change="(s) => loadList(1, s)"
       @row-click="(row) => (detailJob = row)"
+      @status-change="onStatusChange"
     />
 
     <div
@@ -296,15 +329,6 @@ const columns = computed<TableColumn<LiepinJob>[]>(() => [
             </span>
           </div>
         </div>
-        <a
-          v-if="detailJob.jobLink"
-          :href="detailJob.jobLink"
-          target="_blank"
-          rel="noreferrer"
-          class="text-primary underline text-sm"
-        >
-          打开链接
-        </a>
         <Button variant="outline" size="sm" class="mt-4" @click="detailJob = null">
           关闭
         </Button>

@@ -260,6 +260,22 @@ public class ZhilianController {
         return zhilianService.listZhilianJobs(statusList, location, experience, degree, minK, maxK, keyword, page, size);
     }
 
+    /**
+     * 人工修改投递状态
+     */
+    @PutMapping("/jobs/{jobId}/delivery-status")
+    public Map<String, Object> updateDeliveryStatus(
+            @PathVariable("jobId") String jobId,
+            @RequestBody Map<String, String> body
+    ) {
+        String status = body != null ? body.get("status") : null;
+        boolean ok = zhilianService.updateDeliveryStatusByJobId(jobId, status);
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("success", ok);
+        resp.put("message", ok ? "更新成功" : "更新失败（记录不存在或状态无效）");
+        return resp;
+    }
+
     // ==================== 任务管理相关接口 ====================
 
     /**

@@ -15,10 +15,17 @@ public final class DeliveryStatuses {
     public static String normalize(String status) {
         if (status == null || status.isBlank()) return PENDING;
         String t = status.trim();
-        if (DELIVERED.equals(t) || FILTERED.equals(t) || FAILED.equals(t) || PENDING.equals(t)) {
+        if (isKnown(t)) {
             return t;
         }
         return PENDING;
+    }
+
+    /** 是否为系统支持的投递状态（人工修改接口校验用） */
+    public static boolean isKnown(String status) {
+        if (status == null || status.isBlank()) return false;
+        String t = status.trim();
+        return PENDING.equals(t) || DELIVERED.equals(t) || FILTERED.equals(t) || FAILED.equals(t);
     }
 
     /** 兼容旧整型 delivered：0/1/2 */

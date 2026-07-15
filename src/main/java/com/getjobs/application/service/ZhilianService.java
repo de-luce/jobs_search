@@ -7,6 +7,7 @@ import com.getjobs.application.mapper.ZhilianConfigMapper;
 import com.getjobs.application.mapper.ZhilianOptionMapper;
 import com.getjobs.application.mapper.ZhilianJobDataMapper;
 import com.getjobs.application.utils.SalaryParseUtil;
+import com.getjobs.application.utils.DeliveryStatuses;
 import com.getjobs.worker.zhilian.ZhilianConfig;
 import com.mybatisflex.core.query.QueryChain;
 import com.mybatisflex.core.update.UpdateChain;
@@ -248,6 +249,16 @@ public class ZhilianService {
                 .set(ZHILIAN_JOB_DATA.UPDATE_TIME, LocalDateTime.now())
                 .where(ZHILIAN_JOB_DATA.JOB_TITLE.eq(jobTitle))
                 .and(ZHILIAN_JOB_DATA.COMPANY_NAME.eq(companyName))
+                .update();
+    }
+
+    /** 人工修改投递状态（按 jobId） */
+    public boolean updateDeliveryStatusByJobId(String jobId, String status) {
+        if (jobId == null || jobId.isBlank() || !DeliveryStatuses.isKnown(status)) return false;
+        return UpdateChain.of(zhilianJobDataMapper)
+                .set(ZHILIAN_JOB_DATA.DELIVERY_STATUS, status.trim())
+                .set(ZHILIAN_JOB_DATA.UPDATE_TIME, LocalDateTime.now())
+                .where(ZHILIAN_JOB_DATA.JOB_ID.eq(jobId.trim()))
                 .update();
     }
 
