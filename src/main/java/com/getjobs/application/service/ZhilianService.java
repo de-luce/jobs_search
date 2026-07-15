@@ -76,14 +76,25 @@ public class ZhilianService {
             }
         }
 
-        // 薪资：缺省或“不限”映射为 0，其它保持原值
-        String salary = safeTrim(entity.getSalary());
-        if (salary == null || salary.isEmpty() || "不限".equals(salary)) {
-            config.setSalary("0");
-        } else {
-            config.setSalary(salary);
-        }
+        // 薪资：缺省或「不限」映射为 0，其它按字典转 code
+        config.setSalary(normalizeSingleOption("salary", entity.getSalary(), "0"));
+        config.setExperience(normalizeSingleOption("experience", entity.getExperience(), ""));
+        config.setDegree(normalizeSingleOption("degree", entity.getDegree(), ""));
+        config.setJobType(normalizeSingleOption("jobType", entity.getJobType(), ""));
+        config.setCompanyType(normalizeSingleOption("companyType", entity.getCompanyType(), ""));
+        config.setCompanySize(normalizeSingleOption("companySize", entity.getCompanySize(), ""));
         return config;
+    }
+
+    private String normalizeSingleOption(String type, String raw, String unlimitedFallback) {
+        String value = safeTrim(raw);
+        if (value == null || value.isEmpty() || "不限".equals(value) || "全部".equals(value)) {
+            return unlimitedFallback;
+        }
+        ZhilianOptionEntity byCode = getOptionByTypeAndCode(type, value);
+        if (byCode != null) return byCode.getCode();
+        String code = getCodeByTypeAndName(type, value);
+        return code != null ? code : value;
     }
 
     public List<String> parseListString(String raw) {
@@ -133,6 +144,11 @@ public class ZhilianService {
             toInsert.setKeywords(incoming.getKeywords());
             toInsert.setCityCode(incoming.getCityCode());
             toInsert.setSalary(incoming.getSalary());
+            toInsert.setExperience(incoming.getExperience());
+            toInsert.setDegree(incoming.getDegree());
+            toInsert.setJobType(incoming.getJobType());
+            toInsert.setCompanyType(incoming.getCompanyType());
+            toInsert.setCompanySize(incoming.getCompanySize());
             toInsert.setCreatedAt(now);
             toInsert.setUpdatedAt(now);
             zhilianConfigMapper.insert(toInsert);
@@ -143,6 +159,11 @@ public class ZhilianService {
             if (incoming.getKeywords() != null) toUpdate.setKeywords(incoming.getKeywords());
             if (incoming.getCityCode() != null) toUpdate.setCityCode(incoming.getCityCode());
             if (incoming.getSalary() != null) toUpdate.setSalary(incoming.getSalary());
+            if (incoming.getExperience() != null) toUpdate.setExperience(incoming.getExperience());
+            if (incoming.getDegree() != null) toUpdate.setDegree(incoming.getDegree());
+            if (incoming.getJobType() != null) toUpdate.setJobType(incoming.getJobType());
+            if (incoming.getCompanyType() != null) toUpdate.setCompanyType(incoming.getCompanyType());
+            if (incoming.getCompanySize() != null) toUpdate.setCompanySize(incoming.getCompanySize());
             toUpdate.setCreatedAt(first.getCreatedAt());
             toUpdate.setUpdatedAt(now);
             zhilianConfigMapper.update(toUpdate);
@@ -255,11 +276,23 @@ public class ZhilianService {
     /** 人工修改投递状态（按 jobId） */
     public boolean updateDeliveryStatusByJobId(String jobId, String status) {
         if (jobId == null || jobId.isBlank() || !DeliveryStatuses.isKnown(status)) return false;
-        return UpdateChain.of(zhilianJobDataMapper)
-                .set(ZHILIAN_JOB_DATA.DELIVERY_STATUS, status.trim())
-                .set(ZHILIAN_JOB_DATA.UPDATE_TIME, LocalDateTime.now())
+        ZhilianJobDataEntity existing = QueryChain.of(zhilianJobDataMapper)
                 .where(ZHILIAN_JOB_DATA.JOB_ID.eq(jobId.trim()))
-                .update();
+                .limit(1)
+                .one();
+        if (existing == null) {
+            log.warn("人工更新智联投递状态失败：记录不存在 jobId={}", jobId);
+            return false;
+        }
+        existing.setDeliveryStatus(status.trim());
+        existing.setUpdateTime(LocalDateTime.now());
+        int rows = zhilianJobDataMapper.update(existing);
+        if (rows <= 0) {
+            log.warn("人工更新智联投递状态失败：update=0 jobId={} status={}", jobId, status);
+            return false;
+        }
+        log.info("人工更新智联投递状态成功 jobId={} status={}", jobId.trim(), status.trim());
+        return true;
     }
 
     // ==================== 投递分析（Dashboard）与列表 ====================

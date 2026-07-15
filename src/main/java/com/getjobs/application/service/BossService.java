@@ -539,11 +539,20 @@ public class BossService {
      */
     public boolean updateDeliveryStatusById(Long id, String status) {
         if (id == null || !DeliveryStatuses.isKnown(status)) return false;
-        return UpdateChain.of(bossJobDataMapper)
-                .set(BOSS_JOB_DATA.DELIVERY_STATUS, status.trim())
-                .set(BOSS_JOB_DATA.UPDATED_AT, LocalDateTime.now())
-                .where(BOSS_JOB_DATA.ID.eq(id))
-                .update();
+        BossJobDataEntity existing = bossJobDataMapper.selectOneById(id);
+        if (existing == null) {
+            log.warn("人工更新投递状态失败：记录不存在 id={}", id);
+            return false;
+        }
+        existing.setDeliveryStatus(status.trim());
+        existing.setUpdatedAt(LocalDateTime.now());
+        int rows = bossJobDataMapper.update(existing);
+        if (rows <= 0) {
+            log.warn("人工更新投递状态失败：update=0 id={} status={}", id, status);
+            return false;
+        }
+        log.info("人工更新投递状态成功 id={} status={}", id, status.trim());
+        return true;
     }
 
     // ==================== 投递分析（Dashboard）相关方法 ====================

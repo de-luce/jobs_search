@@ -12,6 +12,7 @@ import {
   DEFAULT_FILTER,
   exportCsv,
   filterToParams,
+  formatDateOnly,
   PLATFORM_HEADHUNTER_FILTER,
   PLATFORM_RELOAD,
   PLATFORM_STATUS_OPTIONS,
@@ -23,6 +24,7 @@ import {
   type PagedResult,
   type StatsResponse,
 } from '@/lib/analysis'
+import { updateDeliveryStatus } from '@/lib/deliveryStatusApi'
 import { buildChartConfigs } from '@/lib/chartConfigs'
 import { deliveryStatusClass, type KpiItem } from '@/lib/analysisKpi'
 import { getApiBase } from '@/lib/platform'
@@ -197,6 +199,7 @@ const kpiItems = computed<KpiItem[]>(() => [
   { label: '已投递', value: kpi.value?.delivered ?? 0, highlight: 'delivered' },
   { label: '未投递', value: kpi.value?.pending ?? 0, highlight: 'pending' },
   { label: '已过滤', value: kpi.value?.filtered ?? 0, highlight: 'filtered' },
+  { label: '失败', value: kpi.value?.failed ?? 0, highlight: 'failed' },
   { label: salaryKpiLabel('liepin'), value: avgSalaryDisplay.value, highlight: 'salary' },
 ])
 
@@ -231,26 +234,20 @@ const columns = computed<TableColumn<LiepinJob>[]>(() => [
 
 async function onStatusChange(row: LiepinJob, status: string) {
   const current = liepinDeliveryStatus(row.deliveryStatus)
-  if (!row.jobId || current === status) return
-  try {
-    const res = await fetch(`${API}/api/liepin/jobs/${row.jobId}/delivery-status`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    })
-    const data = await res.json()
-    if (!data?.success) {
-      console.error('update liepin delivery status failed', data?.message)
-      await loadList(page.value, size.value, { silent: true })
-      return
-    }
-    row.deliveryStatus = status
-    if (detailJob.value?.jobId === row.jobId) detailJob.value.deliveryStatus = status
-    await loadStats({ silent: true })
-  } catch (e) {
-    console.error('update liepin delivery status failed', e)
+  if (row.jobId == null || current === status) return
+  const result = await updateDeliveryStatus(
+    `${API}/api/liepin/jobs/${row.jobId}/delivery-status`,
+    status
+  )
+  if (!result.ok) {
+    console.error('update liepin delivery status failed', result.message)
+    window.alert(result.message)
     await loadList(page.value, size.value, { silent: true })
+    return
   }
+  row.deliveryStatus = status
+  if (detailJob.value?.jobId === row.jobId) detailJob.value.deliveryStatus = status
+  await loadStats({ silent: true })
 }
 </script>
 
@@ -262,11 +259,7 @@ async function onStatusChange(row: LiepinJob, status: string) {
       </template>
     </AnalysisPageHeader>
 
-    <AnalysisKpiGrid
-      :items="kpiItems"
-      :loading="loadingStats"
-      class="md:grid-cols-4 lg:grid-cols-4"
-    />
+    <AnalysisKpiGrid :items="kpiItems" :loading="loadingStats" />
 
     <AnalysisFilterPanel
       :filter="filter"
@@ -328,6 +321,7 @@ async function onStatusChange(row: LiepinJob, status: string) {
               {{ liepinDeliveryStatus(detailJob.deliveryStatus) }}
             </span>
           </div>
+          <div>创建时间：{{ formatDateOnly(detailJob.createTime) || '-' }}</div>
         </div>
         <Button variant="outline" size="sm" class="mt-4" @click="detailJob = null">
           关闭

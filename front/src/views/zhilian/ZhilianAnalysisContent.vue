@@ -24,6 +24,7 @@ import {
   type AnalysisFilterState,
   type AnalysisFilterOption,
 } from '@/lib/analysis'
+import { updateDeliveryStatus } from '@/lib/deliveryStatusApi'
 import { getApiBase } from '@/lib/platform'
 import { formatSalaryByUnit, parseSalary } from '@/lib/salary'
 import { useAnalysisRealtimeRefresh } from '@/composables/useRealtime'
@@ -58,6 +59,7 @@ const exporting = ref(false)
 const detailJob = ref<ZhilianJob | null>(null)
 const salaryUnit = PLATFORM_SALARY_UNIT.zhilian
 const locationOptions = ref<AnalysisFilterOption[]>([])
+const experienceOptions = ref<AnalysisFilterOption[]>([])
 
 const filterParams = computed(() => filterToParams(filter.value, 'zhilian'))
 
@@ -66,6 +68,7 @@ async function loadFilterOptions() {
     const res = await fetch(`${API}/api/zhilian/config`)
     const data = await res.json()
     locationOptions.value = toFilterOptions(data.options?.city)
+    experienceOptions.value = toFilterOptions(data.options?.experience)
   } catch (e) {
     console.error('fetch zhilian filter options failed', e)
   }
@@ -135,7 +138,7 @@ async function exportCSV() {
       if (all.length >= totalCount || chunk.length === 0) break
       currentPage += 1
     }
-    const header = ['公司', '岗位', '薪资', '地点', '经验', '学历', '状态', '链接']
+    const header = ['公司', '岗位', '薪资', '地点', '经验', '学历', '状态', '链接', '创建时间']
     const rows = all.map((it) => [
       it.companyName || '',
       it.jobTitle || '',
@@ -145,6 +148,7 @@ async function exportCSV() {
       it.degree || '',
       it.deliveryStatus || '',
       it.jobLink || '',
+      it.createTime || '',
     ])
     exportCsv(`zhilian_${new Date().toISOString().slice(0, 10)}.csv`, header, rows)
   } finally {
@@ -214,25 +218,19 @@ function onFilterChange(patch: Partial<AnalysisFilterState>) {
 
 async function onStatusChange(row: ZhilianJob, status: string) {
   if (!row.jobId || row.deliveryStatus === status) return
-  try {
-    const res = await fetch(`${API}/api/zhilian/jobs/${encodeURIComponent(row.jobId)}/delivery-status`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    })
-    const data = await res.json()
-    if (!data?.success) {
-      console.error('update zhilian delivery status failed', data?.message)
-      await loadList(page.value, size.value, { silent: true })
-      return
-    }
-    row.deliveryStatus = status
-    if (detailJob.value?.jobId === row.jobId) detailJob.value.deliveryStatus = status
-    await loadStats({ silent: true })
-  } catch (e) {
-    console.error('update zhilian delivery status failed', e)
+  const result = await updateDeliveryStatus(
+    `${API}/api/zhilian/jobs/${encodeURIComponent(row.jobId)}/delivery-status`,
+    status
+  )
+  if (!result.ok) {
+    console.error('update zhilian delivery status failed', result.message)
+    window.alert(result.message)
     await loadList(page.value, size.value, { silent: true })
+    return
   }
+  row.deliveryStatus = status
+  if (detailJob.value?.jobId === row.jobId) detailJob.value.deliveryStatus = status
+  await loadStats({ silent: true })
 }
 </script>
 
@@ -255,6 +253,7 @@ async function onStatusChange(row: ZhilianJob, status: string) {
       :exporting="exporting"
       :salary-unit="salaryUnit"
       :location-options="locationOptions"
+      :experience-options="experienceOptions"
       @update:filter="onFilterChange"
       @apply="applyFilters"
       @export="exportCSV"

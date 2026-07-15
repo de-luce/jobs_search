@@ -1455,6 +1455,11 @@ public class Job51 {
         StringBuilder query = new StringBuilder();
         query.append(JobUtils.appendListParam("jobArea", config.getJobArea()));
         query.append(JobUtils.appendListParam("salary", config.getSalary()));
+        query.append(JobUtils.appendParam("workYear", config.getWorkYear()));
+        query.append(JobUtils.appendParam("degree", config.getDegree()));
+        query.append(JobUtils.appendParam("companyType", config.getCompanyType()));
+        query.append(JobUtils.appendParam("companySize", config.getCompanySize()));
+        query.append(JobUtils.appendParam("jobType", config.getJobType()));
         query.append("&keyword=").append(URLEncoder.encode(keyword, StandardCharsets.UTF_8));
         String q = query.toString();
         if (q.startsWith("&")) {

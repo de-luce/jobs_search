@@ -5,7 +5,6 @@ import com.getjobs.application.service.BlacklistService;
 import com.getjobs.application.service.ZhilianService;
 import com.getjobs.application.utils.DeliveryStatuses;
 import com.getjobs.worker.utils.Job;
-import com.getjobs.worker.utils.JobUtils;
 import com.getjobs.worker.utils.PlaywrightUtil;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
@@ -563,8 +562,26 @@ public class ZhiLian {
         StringBuilder url = new StringBuilder(HOME_URL);
         url.append("jl").append(config.getCityCode()).append("/");
         url.append("p").append(pageNum).append("?");
-        url.append(JobUtils.appendParam("sl", config.getSalary()));
-        return url.toString();
+        appendFilter(url, "sl", config.getSalary());
+        appendFilter(url, "we", config.getExperience());
+        appendFilter(url, "el", config.getDegree());
+        appendFilter(url, "et", config.getJobType());
+        appendFilter(url, "ct", config.getCompanyType());
+        appendFilter(url, "cs", config.getCompanySize());
+        String built = url.toString();
+        return built.endsWith("?") || built.endsWith("&")
+                ? built.substring(0, built.length() - 1)
+                : built;
+    }
+
+    private void appendFilter(StringBuilder url, String name, String value) {
+        if (value == null || value.isEmpty() || "0".equals(value)) {
+            return;
+        }
+        if (url.charAt(url.length() - 1) != '?' && url.charAt(url.length() - 1) != '&') {
+            url.append('&');
+        }
+        url.append(name).append('=').append(value);
     }
 
     /**

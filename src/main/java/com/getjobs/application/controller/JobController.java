@@ -241,6 +241,11 @@ public class JobController {
         Map<String, List<Map<String, String>>> options = new HashMap<>();
         options.put("jobArea", buildOptionsFromDb("jobArea"));
         options.put("salary", buildOptionsFromDb("salary"));
+        options.put("workYear", buildOptionsFromDb("workYear"));
+        options.put("degree", buildOptionsFromDb("degree"));
+        options.put("companyType", buildOptionsFromDb("companyType"));
+        options.put("companySize", buildOptionsFromDb("companySize"));
+        options.put("jobType", buildOptionsFromDb("jobType"));
 
         result.put("config", config);
         result.put("options", options);
@@ -268,8 +273,21 @@ public class JobController {
             List<String> names = toNames("salary", raw);
             config.setSalary(toBracketListString(names));
         }
+        config.setWorkYear(normalizeSingleOption("workYear", config.getWorkYear()));
+        config.setDegree(normalizeSingleOption("degree", config.getDegree()));
+        config.setCompanyType(normalizeSingleOption("companyType", config.getCompanyType()));
+        config.setCompanySize(normalizeSingleOption("companySize", config.getCompanySize()));
+        config.setJobType(normalizeSingleOption("jobType", config.getJobType()));
 
         return job51Service.updateConfig(config);
+    }
+
+    private String normalizeSingleOption(String type, String raw) {
+        if (raw == null) return null;
+        String t = raw.trim();
+        if (t.isEmpty() || "不限".equals(t) || "全部".equals(t)) return "";
+        List<String> names = toNames(type, List.of(t));
+        return names.isEmpty() ? "" : names.get(0);
     }
 
     /** 返回 jobArea 选项列表 */
@@ -513,17 +531,17 @@ public class JobController {
     /**
      * 人工修改投递状态
      */
-    @PutMapping("/51job/jobs/{jobId}/delivery-status")
+    @PostMapping("/51job/jobs/{jobId}/delivery-status")
     public Map<String, Object> updateJob51DeliveryStatus(
             @PathVariable("jobId") Long jobId,
             @RequestBody Map<String, String> body
     ) {
         String status = body != null ? body.get("status") : null;
         boolean ok = job51Service.updateDeliveryStatus(jobId, status);
-        return Map.of(
-                "success", ok,
-                "message", ok ? "更新成功" : "更新失败（记录不存在或状态无效）"
-        );
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("success", ok);
+        resp.put("message", ok ? "更新成功" : "更新失败（记录不存在或状态无效）");
+        return resp;
     }
 
     /** 刷新 job51_data，返回总数 */

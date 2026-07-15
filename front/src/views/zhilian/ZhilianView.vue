@@ -4,7 +4,7 @@ import { Icon } from '@iconify/vue'
 import { createSSEWithBackoff } from '@/lib/sse'
 import { getApiBase, openPlatform } from '@/lib/platform'
 import { usePlatformDeliveryStatus } from '@/composables/useRealtime'
-import { parseKeywordsFromDb, serializeKeywordsForDb } from '@/lib/jobConfig'
+import { parseKeywordsFromDb, serializeKeywordsForDb, parseSingleTokenFromDb } from '@/lib/jobConfig'
 import Input from '@/components/ui/Input.vue'
 import Select from '@/components/ui/Select.vue'
 import PlatformPageHeader from '@/components/PlatformPageHeader.vue'
@@ -22,6 +22,11 @@ interface ZhilianConfig {
   keywords?: string
   cityCode?: string
   salary?: string
+  experience?: string
+  degree?: string
+  jobType?: string
+  companyType?: string
+  companySize?: string
 }
 
 interface Option {
@@ -31,7 +36,23 @@ interface Option {
 
 interface ZhilianOptions {
   city: Option[]
+  salary: Option[]
+  experience: Option[]
+  degree: Option[]
+  jobType: Option[]
+  companyType: Option[]
+  companySize: Option[]
 }
+
+const emptyOptions = (): ZhilianOptions => ({
+  city: [],
+  salary: [],
+  experience: [],
+  degree: [],
+  jobType: [],
+  companyType: [],
+  companySize: [],
+})
 
 const API = getApiBase()
 const isLoggedIn = ref(false)
@@ -44,22 +65,47 @@ const saveResult = ref<{ success: boolean; message: string } | null>(null)
 const showLogoutResultDialog = ref(false)
 const logoutResult = ref<{ success: boolean; message: string } | null>(null)
 
-const config = ref<ZhilianConfig>({ keywords: '', cityCode: '', salary: '' })
-const options = ref<ZhilianOptions>({ city: [] })
+const config = ref<ZhilianConfig>({
+  keywords: '',
+  cityCode: '',
+  salary: '0',
+  experience: '',
+  degree: '',
+  jobType: '',
+  companyType: '',
+  companySize: '',
+})
+const options = ref<ZhilianOptions>(emptyOptions())
 const loadingConfig = ref(true)
 
 let sseClient: ReturnType<typeof createSSEWithBackoff> | null = null
+
+function resolveCode(list: Option[] | undefined, raw?: string, fallback = ''): string {
+  const token = parseSingleTokenFromDb(raw)
+  if (!token || token === '不限' || token === '全部') return fallback
+  const match = (list || []).find((o) => o.code === token || o.name === token)
+  return match?.code ?? (fallback || token)
+}
 
 async function fetchAllData() {
   try {
     const res = await fetch(`${API}/api/zhilian/config`)
     const data = await res.json()
+    const opts: ZhilianOptions = { ...emptyOptions(), ...(data.options || {}) }
+    options.value = opts
     if (data.config) {
-      const normalized = { ...data.config }
-      normalized.keywords = parseKeywordsFromDb(data.config.keywords)
-      config.value = normalized
+      config.value = {
+        ...data.config,
+        keywords: parseKeywordsFromDb(data.config.keywords),
+        cityCode: resolveCode(opts.city, data.config.cityCode, '0'),
+        salary: resolveCode(opts.salary, data.config.salary, '0'),
+        experience: resolveCode(opts.experience, data.config.experience, ''),
+        degree: resolveCode(opts.degree, data.config.degree, ''),
+        jobType: resolveCode(opts.jobType, data.config.jobType, ''),
+        companyType: resolveCode(opts.companyType, data.config.companyType, ''),
+        companySize: resolveCode(opts.companySize, data.config.companySize, ''),
+      }
     }
-    if (data.options) options.value = data.options
   } catch (e) {
     console.error('[智联] 获取配置失败:', e)
   } finally {
@@ -185,9 +231,26 @@ async function triggerLogout() {
   }
 }
 
+function toName(list: Option[], code?: string): string {
+  const t = (code || '').trim()
+  if (!t) return '不限'
+  const match = list.find((o) => o.code === t || o.name === t)
+  return match?.name || t
+}
+
 async function handleSaveConfig() {
   try {
-    const payload = { ...config.value, keywords: serializeKeywordsForDb(config.value.keywords) }
+    const payload = {
+      ...config.value,
+      keywords: serializeKeywordsForDb(config.value.keywords),
+      cityCode: toName(options.value.city, config.value.cityCode),
+      salary: toName(options.value.salary, config.value.salary),
+      experience: toName(options.value.experience, config.value.experience),
+      degree: toName(options.value.degree, config.value.degree),
+      jobType: toName(options.value.jobType, config.value.jobType),
+      companyType: toName(options.value.companyType, config.value.companyType),
+      companySize: toName(options.value.companySize, config.value.companySize),
+    }
     const response = await fetch(`${API}/api/zhilian/config`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -243,7 +306,7 @@ async function handleSaveConfig() {
         <ConfigSection
           platform="zhilian"
           title="搜索配置"
-          description="设置职位搜索关键词、目标城市和薪资范围"
+          description="对齐智联官网搜索页筛选项：关键词、城市、薪资、经验、学历等"
           :delay="6"
         >
           <template #icon>
@@ -276,17 +339,76 @@ async function handleSaveConfig() {
               </Select>
             </ConfigField>
 
-            <ConfigField
-              label="薪资范围"
-              html-for="salary"
-              hint="最低和最高工资（元/月），用逗号分割，如：12000, 20000 或 不限"
-            >
-              <Input
+            <ConfigField label="薪资范围" html-for="salary" hint="对应官网「薪资要求」">
+              <Select
                 id="salary"
-                placeholder="如：12000, 20000 或 不限"
-                :model-value="config.salary || ''"
+                :model-value="config.salary || '0'"
                 @update:model-value="config = { ...config, salary: $event }"
-              />
+              >
+                <option v-for="o in options.salary" :key="o.code || o.name" :value="o.code">
+                  {{ o.name }}
+                </option>
+              </Select>
+            </ConfigField>
+
+            <ConfigField label="工作经验" html-for="experience" hint="对应官网「工作经验」">
+              <Select
+                id="experience"
+                :model-value="config.experience || ''"
+                @update:model-value="config = { ...config, experience: $event }"
+              >
+                <option v-for="o in options.experience" :key="o.code || o.name" :value="o.code">
+                  {{ o.name }}
+                </option>
+              </Select>
+            </ConfigField>
+
+            <ConfigField label="学历要求" html-for="degree" hint="对应官网「学历要求」">
+              <Select
+                id="degree"
+                :model-value="config.degree || ''"
+                @update:model-value="config = { ...config, degree: $event }"
+              >
+                <option v-for="o in options.degree" :key="o.code || o.name" :value="o.code">
+                  {{ o.name }}
+                </option>
+              </Select>
+            </ConfigField>
+
+            <ConfigField label="职位类型" html-for="jobType" hint="全职 / 兼职 / 实习 / 校园">
+              <Select
+                id="jobType"
+                :model-value="config.jobType || ''"
+                @update:model-value="config = { ...config, jobType: $event }"
+              >
+                <option v-for="o in options.jobType" :key="o.code || o.name" :value="o.code">
+                  {{ o.name }}
+                </option>
+              </Select>
+            </ConfigField>
+
+            <ConfigField label="公司性质" html-for="companyType">
+              <Select
+                id="companyType"
+                :model-value="config.companyType || ''"
+                @update:model-value="config = { ...config, companyType: $event }"
+              >
+                <option v-for="o in options.companyType" :key="o.code || o.name" :value="o.code">
+                  {{ o.name }}
+                </option>
+              </Select>
+            </ConfigField>
+
+            <ConfigField label="公司规模" html-for="companySize">
+              <Select
+                id="companySize"
+                :model-value="config.companySize || ''"
+                @update:model-value="config = { ...config, companySize: $event }"
+              >
+                <option v-for="o in options.companySize" :key="o.code || o.name" :value="o.code">
+                  {{ o.name }}
+                </option>
+              </Select>
             </ConfigField>
           </div>
         </ConfigSection>

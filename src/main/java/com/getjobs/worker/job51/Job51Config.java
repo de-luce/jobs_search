@@ -31,6 +31,31 @@ public class Job51Config {
      */
     private List<String> salary;
 
+    /**
+     * 工作年限
+     */
+    private String workYear;
+
+    /**
+     * 学历要求
+     */
+    private String degree;
+
+    /**
+     * 公司性质
+     */
+    private String companyType;
+
+    /**
+     * 公司规模
+     */
+    private String companySize;
+
+    /**
+     * 工作类型
+     */
+    private String jobType;
+
 
     // 注意：已改为在 Job51JobService 中通过 ConfigService 构建配置
     // 保留空的 init 以兼容旧调用，但建议不要再使用

@@ -54,13 +54,14 @@ public class ZhilianController {
         }
 
         Map<String, List<Map<String, String>>> options = new HashMap<>();
-        options.put("city", zhilianService.getOptionsByType("city").stream().map(e -> {
-            Map<String, String> m = new HashMap<>();
-            m.put("name", e.getName());
-            m.put("code", e.getCode());
-            return m;
-        }).collect(Collectors.toList()));
-        // 智联薪资目前不枚举，前端可用文本输入或简单选择"不限"
+        for (String type : List.of("city", "salary", "experience", "degree", "jobType", "companyType", "companySize")) {
+            options.put(type, zhilianService.getOptionsByType(type).stream().map(e -> {
+                Map<String, String> m = new HashMap<>();
+                m.put("name", e.getName());
+                m.put("code", e.getCode());
+                return m;
+            }).collect(Collectors.toList()));
+        }
 
         result.put("config", config);
         result.put("options", options);
@@ -263,7 +264,7 @@ public class ZhilianController {
     /**
      * 人工修改投递状态
      */
-    @PutMapping("/jobs/{jobId}/delivery-status")
+    @PostMapping("/jobs/{jobId}/delivery-status")
     public Map<String, Object> updateDeliveryStatus(
             @PathVariable("jobId") String jobId,
             @RequestBody Map<String, String> body

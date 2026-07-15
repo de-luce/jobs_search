@@ -30,6 +30,7 @@ import {
   type AnalysisFilterOption,
   type PagedResult,
 } from '@/lib/analysis'
+import { updateDeliveryStatus } from '@/lib/deliveryStatusApi'
 
 type BossJob = {
   id: number
@@ -285,26 +286,20 @@ function onFilterPatch(patch: Partial<AnalysisFilterState>) {
 }
 
 async function onStatusChange(row: BossJob, status: string) {
-  if (!row.id || row.deliveryStatus === status) return
-  try {
-    const res = await fetch(`${API}/api/boss/jobs/${row.id}/delivery-status`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    })
-    const data = await res.json()
-    if (!data?.success) {
-      console.error('update boss delivery status failed', data?.message)
-      await loadList(page.value, size.value, { silent: true })
-      return
-    }
-    row.deliveryStatus = status
-    if (detailJob.value?.id === row.id) detailJob.value.deliveryStatus = status
-    await loadStats({ silent: true })
-  } catch (e) {
-    console.error('update boss delivery status failed', e)
+  if (row.id == null || row.deliveryStatus === status) return
+  const result = await updateDeliveryStatus(
+    `${API}/api/boss/jobs/${row.id}/delivery-status`,
+    status
+  )
+  if (!result.ok) {
+    console.error('update boss delivery status failed', result.message)
+    window.alert(result.message)
     await loadList(page.value, size.value, { silent: true })
+    return
   }
+  row.deliveryStatus = status
+  if (detailJob.value?.id === row.id) detailJob.value.deliveryStatus = status
+  await loadStats({ silent: true })
 }
 
 const detailFields: [string, keyof BossJob][] = [
@@ -320,6 +315,7 @@ const detailFields: [string, keyof BossJob][] = [
   ['规模', 'companyScale'],
   ['融资', 'financingStage'],
   ['地址', 'companyAddress'],
+  ['创建时间', 'createdAt'],
 ]
 </script>
 

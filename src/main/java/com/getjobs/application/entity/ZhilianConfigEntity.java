@@ -20,8 +20,23 @@ public class ZhilianConfigEntity {
     /** 城市（中文名或代码，单值） */
     private String cityCode;
 
-    /** 薪资范围（中文名或代码，单值） */
+    /** 薪资范围（中文名或代码，单值；对应 URL 参数 sl） */
     private String salary;
+
+    /** 工作经验（对应 URL 参数 we） */
+    private String experience;
+
+    /** 学历要求（对应 URL 参数 el） */
+    private String degree;
+
+    /** 职位类型（对应 URL 参数 et） */
+    private String jobType;
+
+    /** 公司性质（对应 URL 参数 ct） */
+    private String companyType;
+
+    /** 公司规模（对应 URL 参数 cs） */
+    private String companySize;
 
     /** 创建时间 */
     private LocalDateTime createdAt;

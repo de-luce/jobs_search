@@ -293,7 +293,7 @@ public class LiepinController {
     /**
      * 人工修改投递状态
      */
-    @PutMapping("/jobs/{jobId}/delivery-status")
+    @PostMapping("/jobs/{jobId}/delivery-status")
     public Map<String, Object> updateDeliveryStatus(
             @PathVariable("jobId") Long jobId,
             @RequestBody Map<String, String> body

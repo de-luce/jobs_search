@@ -4,6 +4,7 @@ import com.getjobs.application.service.BossService;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -112,16 +113,16 @@ public class BossAnalyticsController {
     /**
      * 人工修改投递状态
      */
-    @PutMapping("/jobs/{id}/delivery-status")
+    @PostMapping("/jobs/{id}/delivery-status")
     public Map<String, Object> updateDeliveryStatus(
             @PathVariable("id") Long id,
             @RequestBody Map<String, String> body
     ) {
         String status = body != null ? body.get("status") : null;
         boolean ok = bossService.updateDeliveryStatusById(id, status);
-        return Map.of(
-                "success", ok,
-                "message", ok ? "更新成功" : "更新失败（记录不存在或状态无效）"
-        );
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("success", ok);
+        resp.put("message", ok ? "更新成功" : "更新失败（记录不存在或状态无效）");
+        return resp;
     }
 }

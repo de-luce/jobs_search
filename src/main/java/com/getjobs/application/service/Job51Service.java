@@ -80,7 +80,22 @@ public class Job51Service {
         }
         config.setSalary(salaryCodes);
 
+        config.setWorkYear(normalizeOptionalCode("workYear", entity.getWorkYear()));
+        config.setDegree(normalizeOptionalCode("degree", entity.getDegree()));
+        config.setCompanyType(normalizeOptionalCode("companyType", entity.getCompanyType()));
+        config.setCompanySize(normalizeOptionalCode("companySize", entity.getCompanySize()));
+        config.setJobType(normalizeOptionalCode("jobType", entity.getJobType()));
+
         return config;
+    }
+
+    private String normalizeOptionalCode(String type, String raw) {
+        if (raw == null || raw.trim().isEmpty() || "不限".equals(raw.trim()) || "全部".equals(raw.trim())) {
+            return "";
+        }
+        String code = normalizeOptionCode(type, raw.trim());
+        if (com.getjobs.worker.utils.Constant.UNLIMITED_CODE.equals(code)) return "";
+        return code;
     }
 
     public List<String> parseListString(String raw) {
@@ -240,6 +255,11 @@ public class Job51Service {
             toInsert.setKeywords(incoming.getKeywords());
             toInsert.setJobArea(incoming.getJobArea());
             toInsert.setSalary(incoming.getSalary());
+            toInsert.setWorkYear(incoming.getWorkYear());
+            toInsert.setDegree(incoming.getDegree());
+            toInsert.setCompanyType(incoming.getCompanyType());
+            toInsert.setCompanySize(incoming.getCompanySize());
+            toInsert.setJobType(incoming.getJobType());
             toInsert.setCreatedAt(now);
             toInsert.setUpdatedAt(now);
             job51ConfigMapper.insert(toInsert);
@@ -251,6 +271,11 @@ public class Job51Service {
             if (incoming.getKeywords() != null) toUpdate.setKeywords(incoming.getKeywords());
             if (incoming.getJobArea() != null) toUpdate.setJobArea(incoming.getJobArea());
             if (incoming.getSalary() != null) toUpdate.setSalary(incoming.getSalary());
+            if (incoming.getWorkYear() != null) toUpdate.setWorkYear(incoming.getWorkYear());
+            if (incoming.getDegree() != null) toUpdate.setDegree(incoming.getDegree());
+            if (incoming.getCompanyType() != null) toUpdate.setCompanyType(incoming.getCompanyType());
+            if (incoming.getCompanySize() != null) toUpdate.setCompanySize(incoming.getCompanySize());
+            if (incoming.getJobType() != null) toUpdate.setJobType(incoming.getJobType());
             toUpdate.setCreatedAt(first.getCreatedAt());
             toUpdate.setUpdatedAt(now);
             job51ConfigMapper.update(toUpdate);

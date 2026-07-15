@@ -15,6 +15,7 @@ import {
   filterToParams,
   DEFAULT_FILTER,
   exportCsv,
+  formatDateOnly,
   PLATFORM_STATUS_OPTIONS,
   PLATFORM_RELOAD,
   PLATFORM_SALARY_UNIT,
@@ -25,6 +26,7 @@ import {
   type AnalysisFilterState,
   type AnalysisFilterOption,
 } from '@/lib/analysis'
+import { updateDeliveryStatus } from '@/lib/deliveryStatusApi'
 import { buildChartConfigs } from '@/lib/chartConfigs'
 import type { KpiItem } from '@/lib/analysisKpi'
 
@@ -61,6 +63,7 @@ const exporting = ref(false)
 const detailJob = ref<Job51Item | null>(null)
 const salaryUnit = PLATFORM_SALARY_UNIT['51job']
 const locationOptions = ref<AnalysisFilterOption[]>([])
+const experienceOptions = ref<AnalysisFilterOption[]>([])
 
 const filterParams = computed(() => filterToParams(filter.value, '51job'))
 
@@ -69,6 +72,7 @@ async function loadFilterOptions() {
     const res = await fetch(`${API_BASE}/api/51job/config`)
     const data = await res.json()
     locationOptions.value = toFilterOptions(data.options?.jobArea)
+    experienceOptions.value = toFilterOptions(data.options?.workYear)
   } catch (e) {
     console.error('fetch 51job filter options failed', e)
   }
@@ -144,7 +148,7 @@ async function exportCSV() {
       if (all.length >= totalCount || chunk.length === 0) break
       currentPage += 1
     }
-    const header = ['公司', '岗位', '薪资', '地点', '经验', '学历', 'HR', '状态', '链接']
+    const header = ['公司', '岗位', '薪资', '地点', '经验', '学历', 'HR', '状态', '链接', '创建时间']
     const rows = all.map((it) => [
       it.companyName || '',
       it.jobName || '',
@@ -155,6 +159,7 @@ async function exportCSV() {
       it.hrName || '',
       it.deliveryStatus || '',
       it.jobUrl || '',
+      it.createdAt || '',
     ])
     exportCsv(`job51_${new Date().toISOString().slice(0, 10)}.csv`, header, rows)
   } finally {
@@ -183,6 +188,7 @@ const kpiItems = computed<KpiItem[]>(() => [
   { label: '已投递', value: kpi.value?.delivered ?? 0, highlight: 'delivered' },
   { label: '未投递', value: kpi.value?.pending ?? 0, highlight: 'pending' },
   { label: '已过滤', value: kpi.value?.filtered ?? 0, highlight: 'filtered' },
+  { label: '失败', value: kpi.value?.failed ?? 0, highlight: 'failed' },
   { label: salaryKpiLabel('51job'), value: avgSalaryDisplay.value, highlight: 'salary' },
 ])
 
@@ -203,7 +209,15 @@ const tableColumns: TableColumn<Job51Item>[] = [
   { key: 'job', header: '岗位', className: 'max-w-[180px] truncate', accessor: (it) => it.jobName || '-' },
   { key: 'salary', header: '薪资', className: 'whitespace-nowrap', accessor: (it) => it.salary || '-' },
   { key: 'location', header: '地点', className: 'whitespace-nowrap', accessor: (it) => it.location || '-' },
+  { key: 'hr', header: 'HR', className: 'max-w-[100px] truncate', accessor: (it) => it.hrName || '-' },
   { key: 'status', header: '状态', type: 'status', accessor: (it) => it.deliveryStatus || '-' },
+  {
+    key: 'time',
+    header: '时间',
+    className: 'whitespace-nowrap',
+    type: 'date',
+    accessor: (it) => it.createdAt,
+  },
 ]
 
 function onFilterChange(patch: Partial<AnalysisFilterState>) {
@@ -211,26 +225,20 @@ function onFilterChange(patch: Partial<AnalysisFilterState>) {
 }
 
 async function onStatusChange(row: Job51Item, status: string) {
-  if (!row.jobId || row.deliveryStatus === status) return
-  try {
-    const res = await fetch(`${API_BASE}/api/51job/jobs/${row.jobId}/delivery-status`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    })
-    const data = await res.json()
-    if (!data?.success) {
-      console.error('update job51 delivery status failed', data?.message)
-      await loadList(page.value, size.value, { silent: true })
-      return
-    }
-    row.deliveryStatus = status
-    if (detailJob.value?.jobId === row.jobId) detailJob.value.deliveryStatus = status
-    await loadStats({ silent: true })
-  } catch (e) {
-    console.error('update job51 delivery status failed', e)
+  if (row.jobId == null || row.deliveryStatus === status) return
+  const result = await updateDeliveryStatus(
+    `${API_BASE}/api/51job/jobs/${row.jobId}/delivery-status`,
+    status
+  )
+  if (!result.ok) {
+    console.error('update job51 delivery status failed', result.message)
+    window.alert(result.message)
     await loadList(page.value, size.value, { silent: true })
+    return
   }
+  row.deliveryStatus = status
+  if (detailJob.value?.jobId === row.jobId) detailJob.value.deliveryStatus = status
+  await loadStats({ silent: true })
 }
 </script>
 
@@ -242,11 +250,7 @@ async function onStatusChange(row: Job51Item, status: string) {
       </template>
     </AnalysisPageHeader>
 
-    <AnalysisKpiGrid
-      :items="kpiItems"
-      :loading="loadingStats"
-      class="md:grid-cols-4 lg:grid-cols-4"
-    />
+    <AnalysisKpiGrid :items="kpiItems" :loading="loadingStats" />
 
     <AnalysisFilterPanel
       :filter="filter"
@@ -257,6 +261,7 @@ async function onStatusChange(row: Job51Item, status: string) {
       :exporting="exporting"
       :salary-unit="salaryUnit"
       :location-options="locationOptions"
+      :experience-options="experienceOptions"
       @update:filter="onFilterChange"
       @apply="applyFilters"
       @reload="onReload"
@@ -304,6 +309,7 @@ async function onStatusChange(row: Job51Item, status: string) {
           <div><span class="text-muted-foreground">学历：</span>{{ detailJob.degree || '-' }}</div>
           <div><span class="text-muted-foreground">HR：</span>{{ detailJob.hrName || '-' }}</div>
           <div><span class="text-muted-foreground">状态：</span>{{ detailJob.deliveryStatus || '-' }}</div>
+          <div><span class="text-muted-foreground">创建时间：</span>{{ formatDateOnly(detailJob.createdAt) || '-' }}</div>
         </div>
       </div>
     </div>

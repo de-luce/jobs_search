@@ -24,9 +24,34 @@ public class ZhilianConfig {
     private String cityCode;
 
     /**
-     * 薪资范围
+     * 薪资范围（sl）
      */
     private String salary;
+
+    /**
+     * 工作经验（we）
+     */
+    private String experience;
+
+    /**
+     * 学历要求（el）
+     */
+    private String degree;
+
+    /**
+     * 职位类型（et）
+     */
+    private String jobType;
+
+    /**
+     * 公司性质（ct）
+     */
+    private String companyType;
+
+    /**
+     * 公司规模（cs）
+     */
+    private String companySize;
 
 
     // 注意：已改为在 ZhilianJobService 中通过 ConfigService 构建配置

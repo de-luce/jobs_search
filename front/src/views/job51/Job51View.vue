@@ -29,12 +29,35 @@ interface Job51Config {
   keywords?: string
   jobArea?: string
   salary?: string
+  workYear?: string
+  degree?: string
+  companyType?: string
+  companySize?: string
+  jobType?: string
 }
 
 interface Job51Option { name: string; code: string }
-interface Job51Options { jobArea: Job51Option[]; salary: Job51Option[] }
+interface Job51Options {
+  jobArea: Job51Option[]
+  salary: Job51Option[]
+  workYear: Job51Option[]
+  degree: Job51Option[]
+  companyType: Job51Option[]
+  companySize: Job51Option[]
+  jobType: Job51Option[]
+}
 
 const MAX_SALARY_SELECTIONS = 5
+
+const emptyOptions = (): Job51Options => ({
+  jobArea: [],
+  salary: [],
+  workYear: [],
+  degree: [],
+  companyType: [],
+  companySize: [],
+  jobType: [],
+})
 
 const API = getApiBase()
 const isLoggedIn = ref(false)
@@ -47,8 +70,17 @@ const saveResult = ref<{ success: boolean; message: string } | null>(null)
 const showLogoutResultDialog = ref(false)
 const logoutResult = ref<{ success: boolean; message: string } | null>(null)
 
-const config = ref<Job51Config>({ keywords: '', jobArea: '', salary: '' })
-const options = ref<Job51Options>({ jobArea: [], salary: [] })
+const config = ref<Job51Config>({
+  keywords: '',
+  jobArea: '',
+  salary: '',
+  workYear: '',
+  degree: '',
+  companyType: '',
+  companySize: '',
+  jobType: '',
+})
+const options = ref<Job51Options>(emptyOptions())
 const loadingConfig = ref(true)
 const isCustomArea = ref(false)
 const backendAvailable = ref(false)
@@ -59,19 +91,35 @@ const deliveryMessage = ref('')
 let sseClient: ReturnType<typeof createSSEWithBackoff> | null = null
 let progressSseClient: ReturnType<typeof createSSEWithBackoff> | null = null
 
+function resolveCode(list: Job51Option[] | undefined, raw?: string, fallback = ''): string {
+  const token = parseSingleTokenFromDb(raw)
+  if (!token || token === '不限' || token === '全部') return fallback
+  const match = (list || []).find((o) => o.code === token || o.name === token)
+  return match?.code ?? fallback
+}
+
 async function fetchAllData() {
   try {
     const res = await fetch(`${API}/api/51job/config`)
     if (!res.ok) {
       console.warn(`[51job] 获取配置失败: ${res.status}`)
-      config.value = { keywords: '', jobArea: '', salary: '' }
-      options.value = { jobArea: [], salary: [] }
+      config.value = {
+        keywords: '',
+        jobArea: '',
+        salary: '',
+        workYear: '',
+        degree: '',
+        companyType: '',
+        companySize: '',
+        jobType: '',
+      }
+      options.value = emptyOptions()
       return
     }
     const data = await res.json()
     if (data.config || data.options) {
-      const opts: Job51Options = data.options || { jobArea: [], salary: [] }
-      const conf: Job51Config = data.config || { keywords: '', jobArea: '', salary: '' }
+      const opts: Job51Options = { ...emptyOptions(), ...(data.options || {}) }
+      const conf: Job51Config = data.config || {}
 
       const normalizedKeywords = parseKeywordsFromDb(conf.keywords)
       const rawArea = parseSingleTokenFromDb(conf.jobArea)
@@ -97,7 +145,17 @@ async function fetchAllData() {
         ''
 
       options.value = opts
-      config.value = { ...conf, keywords: normalizedKeywords, jobArea: areaCode, salary: JSON.stringify(salaryCodes) }
+      config.value = {
+        ...conf,
+        keywords: normalizedKeywords,
+        jobArea: areaCode,
+        salary: JSON.stringify(salaryCodes),
+        workYear: resolveCode(opts.workYear, conf.workYear, ''),
+        degree: resolveCode(opts.degree, conf.degree, ''),
+        companyType: resolveCode(opts.companyType, conf.companyType, ''),
+        companySize: resolveCode(opts.companySize, conf.companySize, ''),
+        jobType: resolveCode(opts.jobType, conf.jobType, ''),
+      }
       selectedSalaries.value = salaryCodes
       isCustomArea.value = false
     }
@@ -321,11 +379,22 @@ async function handleSaveConfig() {
       }
       return `["${t.replace(/"/g, '\\"')}"]`
     }
+    const toOptionName = (list: Job51Option[], code?: string) => {
+      const t = (code || '').trim()
+      if (!t) return ''
+      const match = list.find((o) => o.code === t || o.name === t)
+      return match?.name || t
+    }
     const payload = {
       ...config.value,
       keywords: serializeKeywordsForDb(config.value.keywords),
       jobArea: toBracketListString(config.value.jobArea, 'jobArea'),
       salary: toBracketListString(config.value.salary, 'salary'),
+      workYear: toOptionName(options.value.workYear, config.value.workYear),
+      degree: toOptionName(options.value.degree, config.value.degree),
+      companyType: toOptionName(options.value.companyType, config.value.companyType),
+      companySize: toOptionName(options.value.companySize, config.value.companySize),
+      jobType: toOptionName(options.value.jobType, config.value.jobType),
     }
     const response = await fetch(`${API}/api/51job/config`, {
       method: 'PUT',
@@ -400,7 +469,7 @@ function toggleCustomArea() {
           </template>
         </PlatformInfoCard>
 
-        <ConfigSection platform="51job" title="搜索配置" description="设置职位搜索关键词、目标城市和薪资范围">
+        <ConfigSection platform="51job" title="搜索配置" description="对齐前程无忧官网搜索页筛选项">
           <template #icon>
             <Icon icon="bi:search" />
           </template>
@@ -457,6 +526,66 @@ function toggleCustomArea() {
                 :max-selections="MAX_SALARY_SELECTIONS"
                 @update:selected="handleSalaryChange"
               />
+            </ConfigField>
+
+            <ConfigField label="工作年限" html-for="workYear">
+              <Select
+                id="workYear"
+                :model-value="config.workYear || ''"
+                @update:model-value="config = { ...config, workYear: $event }"
+              >
+                <option v-for="o in options.workYear" :key="o.code || o.name" :value="o.code">
+                  {{ o.name }}
+                </option>
+              </Select>
+            </ConfigField>
+
+            <ConfigField label="学历要求" html-for="degree">
+              <Select
+                id="degree"
+                :model-value="config.degree || ''"
+                @update:model-value="config = { ...config, degree: $event }"
+              >
+                <option v-for="o in options.degree" :key="o.code || o.name" :value="o.code">
+                  {{ o.name }}
+                </option>
+              </Select>
+            </ConfigField>
+
+            <ConfigField label="工作类型" html-for="jobType">
+              <Select
+                id="jobType"
+                :model-value="config.jobType || ''"
+                @update:model-value="config = { ...config, jobType: $event }"
+              >
+                <option v-for="o in options.jobType" :key="o.code || o.name" :value="o.code">
+                  {{ o.name }}
+                </option>
+              </Select>
+            </ConfigField>
+
+            <ConfigField label="公司性质" html-for="companyType">
+              <Select
+                id="companyType"
+                :model-value="config.companyType || ''"
+                @update:model-value="config = { ...config, companyType: $event }"
+              >
+                <option v-for="o in options.companyType" :key="o.code || o.name" :value="o.code">
+                  {{ o.name }}
+                </option>
+              </Select>
+            </ConfigField>
+
+            <ConfigField label="公司规模" html-for="companySize">
+              <Select
+                id="companySize"
+                :model-value="config.companySize || ''"
+                @update:model-value="config = { ...config, companySize: $event }"
+              >
+                <option v-for="o in options.companySize" :key="o.code || o.name" :value="o.code">
+                  {{ o.name }}
+                </option>
+              </Select>
             </ConfigField>
           </div>
         </ConfigSection>
