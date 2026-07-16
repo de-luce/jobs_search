@@ -81,8 +81,7 @@ public class Liepin {
             page.onRequest(req -> {
                 try {
                     String url = req.url();
-                    if (url != null && url.contains("com.liepin.searchfront4c.pc-search-job")
-                            && !url.contains("com.liepin.searchfront4c.pc-search-job-cond-init")) {
+                    if (LiepinSearchApi.isJobSearchUrl(url)) {
                         // log.info("[拦截][请求] {}", url);
                     }
                 } catch (Exception ignored) {}
@@ -90,9 +89,7 @@ public class Liepin {
             page.onResponse((Response response) -> {
                 try {
                     String url = response.url();
-                    if (url != null && response.status() == 200 &&
-                            url.contains("com.liepin.searchfront4c.pc-search-job") &&
-                            !url.contains("com.liepin.searchfront4c.pc-search-job-cond-init")) {
+                    if (LiepinSearchApi.isJobSearchResponse(url, response.status())) {
                         log.info("[拦截][响应] {}", url);
                         String contentType = null;
                         try { contentType = response.headers().get("content-type"); } catch (Exception ignored) {}
@@ -235,6 +232,25 @@ public class Liepin {
         return shouldStopCallback != null && Boolean.TRUE.equals(shouldStopCallback.get());
     }
 
+    /**
+     * 等 onResponse 解析完当前页岗位列表。公司名只来自 API，未就绪则整页无法投递。
+     */
+    private boolean awaitApiEntitiesReady() {
+        long deadline = System.currentTimeMillis() + 8000;
+        while (System.currentTimeMillis() < deadline) {
+            if (!lastApiEntities.isEmpty()) {
+                return true;
+            }
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return !lastApiEntities.isEmpty();
+    }
+
     private void info(String msg) {
         if (progressCallback != null) {
             progressCallback.onProgress(msg, null, null);
@@ -253,8 +269,17 @@ public class Liepin {
                 nullToEmpty(config.getSalaryCode()),
                 nullToEmpty(config.getWorkYearCode())
         ));
-        page.navigate(searchUrl);
-        
+        lastApiEntities.clear();
+        try {
+            page.waitForResponse(
+                    r -> LiepinSearchApi.isJobSearchResponse(r.url(), r.status()),
+                    () -> page.navigate(searchUrl)
+            );
+        } catch (Exception e) {
+            log.warn("等待首屏搜索接口超时，继续尝试投递: {}", e.getMessage());
+            page.navigate(searchUrl);
+        }
+
         // 等待分页元素加载
         page.waitForSelector(PAGINATION_BOX, new Page.WaitForSelectorOptions().setTimeout(10000));
         // 不再用分页栏可见页码当总页数（AntD 常只显示窗口页如 1..7，会误把 max 设成 7）
@@ -282,9 +307,14 @@ public class Liepin {
                     .setState(WaitForSelectorState.ATTACHED)
                     .setTimeout(15000)
             );
-            info(String.format("正在投递【%s】第【%d】页...", cleanKeyword, i + 1));
-            submitJob();
-            info(String.format("已投递第【%d】页所有的岗位...", i + 1));
+            // 确保接口数据已解析：公司名只来自 API，否则会整页跳过投递
+            if (!awaitApiEntitiesReady()) {
+                log.warn("第 {} 页接口岗位数据未就绪，跳过本页投递", i + 1);
+            } else {
+                info(String.format("正在投递【%s】第【%d】页...", cleanKeyword, i + 1));
+                submitJob();
+                info(String.format("已投递第【%d】页所有的岗位...", i + 1));
+            }
             
             // 查找下一页按钮（AntD v5 结构）
             Locator paginationBox = page.locator(PAGINATION_BOX);
@@ -298,35 +328,21 @@ public class Liepin {
                 break;
             }
             try {
-                page.waitForResponse(r -> {
-                    try {
-                        String u = r.url();
-                        return u != null && u.contains("com.liepin.searchfront4c.pc-search-job") && r.status() == 200;
-                    } catch (Exception ignored) {
-                        return false;
-                    }
-                }, () -> {
-                    Locator btn = nextLi.first().locator("button.ant-pagination-item-link");
-                    if (btn.count() > 0) {
-                        btn.first().click();
-                    } else {
-                        nextLi.first().click();
-                    }
-                });
+                // 先清空，避免误用上一页数据；等真正的岗位列表接口（排除 cond-init）
+                lastApiEntities.clear();
+                page.waitForResponse(
+                        r -> LiepinSearchApi.isJobSearchResponse(r.url(), r.status()),
+                        () -> {
+                            Locator btn = nextLi.first().locator("button.ant-pagination-item-link");
+                            if (btn.count() > 0) {
+                                btn.first().click();
+                            } else {
+                                nextLi.first().click();
+                            }
+                        });
             } catch (Exception e) {
-                log.warn("翻到下一页或等待搜索接口超时: {}", e.getMessage());
-                try {
-                    Locator btn = nextLi.first().locator("button.ant-pagination-item-link");
-                    if (btn.count() > 0) {
-                        btn.first().click();
-                    } else {
-                        nextLi.first().click();
-                    }
-                    PlaywrightUtil.sleep(2);
-                } catch (Exception clickEx) {
-                    log.warn("点击下一页失败，结束翻页: {}", clickEx.getMessage());
-                    break;
-                }
+                log.warn("翻到下一页或等待搜索接口超时，结束翻页: {}", e.getMessage());
+                break;
             }
         }
         info(String.format("【%s】关键词投递完成！", cleanKeyword));

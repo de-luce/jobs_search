@@ -432,7 +432,7 @@ public class Job51Service {
             if (!list.isArray()) list = root.path("job").path("items");
             if (!list.isArray()) list = root.path("resultbody").path("items");
             if (!list.isArray()) {
-                // 静默跳过不兼容结构
+                log.warn("[51job] 搜索 JSON 无兼容岗位列表结构，跳过落库");
                 return;
             }
 
@@ -481,9 +481,9 @@ public class Job51Service {
                 entities.add(e);
             }
             batchInsertIfNotExists(entities);
-            // 静默写库
+            log.info("[51job] 搜索快照落库：解析 {} 条", entities.size());
         } catch (Exception e) {
-            // 静默错误
+            log.warn("[51job] 解析/落库搜索 JSON 失败: {}", e.getMessage());
         }
     }
 
@@ -511,10 +511,15 @@ public class Job51Service {
     private static Long readLong(com.fasterxml.jackson.databind.JsonNode... nodes) {
         for (com.fasterxml.jackson.databind.JsonNode n : nodes) {
             try {
-                if (n == null) continue;
+                if (n == null || n.isMissingNode() || n.isNull()) continue;
+                if (n.isNumber()) {
+                    long v = n.asLong();
+                    return v == 0 ? null : v;
+                }
                 String v = n.asText(null);
                 if (v != null && !v.isEmpty() && !"null".equalsIgnoreCase(v)) {
-                    return Long.parseLong(v);
+                    long parsed = Long.parseLong(v.trim());
+                    return parsed == 0 ? null : parsed;
                 }
             } catch (Exception ignored) {}
         }
@@ -526,17 +531,7 @@ public class Job51Service {
     /** 将指定 jobId 标记为已投递 */
     public void markDelivered(Long jobId) {
         if (jobId == null) return;
-        try (Connection conn = dataSource.getConnection();
-             java.sql.PreparedStatement ps = conn.prepareStatement(
-                     "UPDATE job51_data SET delivery_status=?, update_time=? WHERE job_id=?")) {
-            java.time.LocalDateTime now = java.time.LocalDateTime.now();
-            ps.setString(1, DeliveryStatuses.DELIVERED);
-            ps.setString(2, now.toString());
-            ps.setLong(3, jobId);
-            ps.executeUpdate();
-        } catch (Exception e) {
-            log.warn("标记 51job 已投递失败 job_id={}: {}", jobId, e.getMessage());
-        }
+        markDeliveredBatch(java.util.List.of(jobId));
     }
 
     /** 人工修改投递状态 */
@@ -559,72 +554,65 @@ public class Job51Service {
     /** 标记为已过滤（仅未投递时更新，避免覆盖已投递） */
     public void markFiltered(Long jobId) {
         if (jobId == null) return;
-        try (Connection conn = dataSource.getConnection();
-             java.sql.PreparedStatement ps = conn.prepareStatement(
-                     "UPDATE job51_data SET delivery_status=?, update_time=? WHERE job_id=? AND (delivery_status IS NULL OR delivery_status=? OR delivery_status='')")) {
-            java.time.LocalDateTime now = java.time.LocalDateTime.now();
-            ps.setString(1, DeliveryStatuses.FILTERED);
-            ps.setString(2, now.toString());
-            ps.setLong(3, jobId);
-            ps.setString(4, DeliveryStatuses.PENDING);
-            ps.executeUpdate();
-        } catch (Exception e) {
-            log.warn("标记 51job 已过滤失败 job_id={}: {}", jobId, e.getMessage());
-        }
+        markFilteredBatch(java.util.List.of(jobId));
     }
 
-    /** 批量标记为已过滤 */
+    /** 批量标记为已过滤；若快照不存在则插入占位行，保证统计能看到已过滤 */
     public void markFilteredBatch(java.util.Collection<Long> jobIds) {
         if (jobIds == null || jobIds.isEmpty()) return;
-        try (Connection conn = dataSource.getConnection();
-             java.sql.PreparedStatement ps = conn.prepareStatement(
-                     "UPDATE job51_data SET delivery_status=?, update_time=? WHERE job_id=? AND (delivery_status IS NULL OR delivery_status=? OR delivery_status='')")) {
-            conn.setAutoCommit(false);
-            java.time.LocalDateTime now = java.time.LocalDateTime.now();
-            for (Long id : jobIds) {
-                if (id == null) continue;
-                ps.setString(1, DeliveryStatuses.FILTERED);
-                ps.setString(2, now.toString());
-                ps.setLong(3, id);
-                ps.setString(4, DeliveryStatuses.PENDING);
-                ps.addBatch();
-            }
-            ps.executeBatch();
-            conn.commit();
-        } catch (Exception e) {
-            log.warn("批量标记 51job 已过滤失败: {}", e.getMessage());
-        }
+        upsertDeliveryStatus(jobIds, DeliveryStatuses.FILTERED, true);
     }
 
-    /** 批量标记为已投递 */
+    /** 批量标记为已投递；若快照不存在则插入占位行，避免「投递成功但统计为 0」 */
     public void markDeliveredBatch(java.util.Collection<Long> jobIds) {
         if (jobIds == null || jobIds.isEmpty()) return;
+        upsertDeliveryStatus(jobIds, DeliveryStatuses.DELIVERED, false);
+    }
+
+    /**
+     * SQLite upsert：有则更新状态，无则插入最小快照行。
+     * @param onlyFromPending 为 true 时仅覆盖未投递（用于已过滤，避免冲掉已投递）
+     */
+    private void upsertDeliveryStatus(java.util.Collection<Long> jobIds, String status, boolean onlyFromPending) {
+        String sql = onlyFromPending
+                ? "INSERT INTO job51_data (job_id, delivery_status, create_time, update_time) VALUES (?,?,?,?) "
+                  + "ON CONFLICT(job_id) DO UPDATE SET "
+                  + "delivery_status=excluded.delivery_status, update_time=excluded.update_time "
+                  + "WHERE job51_data.delivery_status IS NULL OR job51_data.delivery_status='' OR job51_data.delivery_status=?"
+                : "INSERT INTO job51_data (job_id, delivery_status, create_time, update_time) VALUES (?,?,?,?) "
+                  + "ON CONFLICT(job_id) DO UPDATE SET "
+                  + "delivery_status=excluded.delivery_status, update_time=excluded.update_time";
         try (Connection conn = dataSource.getConnection();
-             java.sql.PreparedStatement ps = conn.prepareStatement(
-                     "UPDATE job51_data SET delivery_status=?, update_time=? WHERE job_id=?")) {
+             java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
             conn.setAutoCommit(false);
             java.time.LocalDateTime now = java.time.LocalDateTime.now();
+            String nowIso = now.toString();
+            int n = 0;
             for (Long id : jobIds) {
                 if (id == null) continue;
-                ps.setString(1, DeliveryStatuses.DELIVERED);
-                ps.setString(2, now.toString());
-                ps.setLong(3, id);
+                ps.setLong(1, id);
+                ps.setString(2, status);
+                ps.setString(3, nowIso);
+                ps.setString(4, nowIso);
+                if (onlyFromPending) {
+                    ps.setString(5, DeliveryStatuses.PENDING);
+                }
                 ps.addBatch();
+                n++;
             }
             int[] counts = ps.executeBatch();
             conn.commit();
-            try {
-                int updated = 0;
-                if (counts != null) {
-                    for (int c : counts) {
-                        if (c > 0) updated += c;
-                    }
+            int touched = 0;
+            if (counts != null) {
+                for (int c : counts) {
+                    if (c > 0) touched += c;
                 }
-                String sample = jobIds.stream().filter(java.util.Objects::nonNull).limit(5).map(String::valueOf).collect(java.util.stream.Collectors.joining(", "));
-                log.info("[51job] 批量标记已投递完成，入参 {} 条，成功更新 {} 条，示例ID: {}", jobIds.size(), updated, sample);
-            } catch (Exception ignored) {}
+            }
+            String sample = jobIds.stream().filter(java.util.Objects::nonNull).limit(5).map(String::valueOf)
+                    .collect(java.util.stream.Collectors.joining(", "));
+            log.info("[51job] upsert {} 完成，入参 {} 条，影响 {} 行，示例ID: {}", status, n, touched, sample);
         } catch (Exception e) {
-            log.warn("批量标记 51job 已投递失败: {}", e.getMessage());
+            log.warn("批量 upsert 51job 状态失败 status={}: {}", status, e.getMessage());
         }
     }
 

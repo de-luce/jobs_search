@@ -162,59 +162,66 @@ public class Job51 {
                     page.onResponse(r -> {
                         try {
                             String url = r.url();
-                            if (url != null && url.contains("/api/job/search-pc") && "GET".equalsIgnoreCase(r.request().method())) {
-                                int status = 0;
-                                try { status = r.status(); } catch (Throwable ignored) {}
-                                String text = null;
-                                try { text = r.text(); } catch (Throwable ignored) {}
-                                int len = text == null ? 0 : text.length();
-                                // 基于 URL 的 requestId 做去重，避免重复解析
-                                String requestId = null;
-                                try {
-                                    java.net.URI u = new java.net.URI(url);
-                                    String q = u.getQuery();
-                                    if (q != null) {
-                                        for (String part : q.split("&")) {
-                                            int i = part.indexOf('=');
-                                            if (i > 0 && "requestId".equals(part.substring(0, i))) {
-                                                requestId = java.net.URLDecoder.decode(part.substring(i + 1), java.nio.charset.StandardCharsets.UTF_8);
-                                                break;
-                                            }
+                            String method = null;
+                            try { method = r.request().method(); } catch (Throwable ignored) {}
+                            if (!Job51SearchApi.isSearchPcRequest(url, method)) {
+                                return;
+                            }
+                            int status = 0;
+                            try { status = r.status(); } catch (Throwable ignored) {}
+                            if (status != 200) {
+                                return;
+                            }
+                            String text = null;
+                            try { text = r.text(); } catch (Throwable ignored) {}
+                            // 基于 URL 的 requestId 做去重，避免重复解析
+                            String requestId = null;
+                            try {
+                                java.net.URI u = new java.net.URI(url);
+                                String q = u.getQuery();
+                                if (q != null) {
+                                    for (String part : q.split("&")) {
+                                        int i = part.indexOf('=');
+                                        if (i > 0 && "requestId".equals(part.substring(0, i))) {
+                                            requestId = java.net.URLDecoder.decode(part.substring(i + 1), java.nio.charset.StandardCharsets.UTF_8);
+                                            break;
                                         }
                                     }
-                                } catch (Exception ignored) {}
-                                if (requestId != null && !requestId.isBlank() && processedRequestIds.contains(requestId)) {
-                                    return;
                                 }
-                                if (text != null) {
-                                    // 根据 Content-Type 粗判是否为 JSON
-                                    boolean isJson = false;
-                                    try {
-                                        java.util.Map<String, String> headers = r.headers();
-                                        if (headers != null) {
-                                            String ct = headers.getOrDefault("content-type", headers.get("Content-Type"));
-                                            if (ct != null && ct.toLowerCase().contains("json")) isJson = true;
-                                        }
-                                    } catch (Throwable ignored) {}
-                                    if (isJson) {
-                                        // 解析并保存到数据库
-                                        job51Service.parseAndPersistJob51SearchJson(text);
-                                        // 提取当前页 jobId + 公司名并缓存
-                                        cachePageJobsFromJson(text);
-                                        List<Long> jobIds;
-                                        synchronized (currentPageJobIds) {
-                                            jobIds = new ArrayList<>(currentPageJobIds);
-                                        }
-                                        CompletableFuture<Integer> future = searchApiFuture;
-                                        if (future != null && !future.isDone()) {
-                                            future.complete(jobIds == null ? 0 : jobIds.size());
-                                        }
-                                        if (requestId != null && !requestId.isBlank()) processedRequestIds.add(requestId);
-                                    } // 非JSON静默跳过
+                            } catch (Exception ignored) {}
+                            if (requestId != null && !requestId.isBlank() && processedRequestIds.contains(requestId)) {
+                                return;
+                            }
+                            if (text == null) {
+                                return;
+                            }
+                            String contentType = null;
+                            try {
+                                java.util.Map<String, String> headers = r.headers();
+                                if (headers != null) {
+                                    contentType = headers.getOrDefault("content-type", headers.get("Content-Type"));
                                 }
+                            } catch (Throwable ignored) {}
+                            if (!Job51SearchApi.looksLikeJsonBody(contentType, text)) {
+                                return;
+                            }
+                            // 解析并保存到数据库
+                            job51Service.parseAndPersistJob51SearchJson(text);
+                            // 提取当前页 jobId + 公司名并缓存
+                            cachePageJobsFromJson(text);
+                            List<Long> jobIds;
+                            synchronized (currentPageJobIds) {
+                                jobIds = new ArrayList<>(currentPageJobIds);
+                            }
+                            CompletableFuture<Integer> future = searchApiFuture;
+                            if (future != null && !future.isDone()) {
+                                future.complete(jobIds == null ? 0 : jobIds.size());
+                            }
+                            if (requestId != null && !requestId.isBlank()) {
+                                processedRequestIds.add(requestId);
                             }
                         } catch (Throwable e) {
-                            // 静默错误
+                            log.warn("[51job] 处理搜索接口响应失败: {}", e.getMessage());
                         }
                     });
                 } catch (Throwable e) {
@@ -1005,10 +1012,13 @@ public class Job51 {
 
     /**
      * 翻到下一页。优先点「下一页」，失败再尝试页码输入跳转。
+     * 必须确认列表/jobId 相对翻页前发生变化，否则视为翻页失败（避免旧 DOM 空转投递、统计不落库）。
      */
     private boolean goToNextPage() {
         dismissDeliveryDialogs(2);
+        List<Long> beforeIds = snapshotCurrentPageJobIds();
         resetSearchApiFuture();
+        clearPageJobCache();
 
         // 1) 下一页按钮
         String[] nextSelectors = {
@@ -1043,7 +1053,7 @@ public class Job51 {
                 first.scrollIntoViewIfNeeded();
                 first.click(new Locator.ClickOptions().setTimeout(3000));
                 log.info("[51job] 已点击下一页: {}", sel);
-                return waitAfterPageChange();
+                return waitAfterPageChange(beforeIds);
             } catch (Exception ignored) {}
         }
 
@@ -1062,7 +1072,7 @@ public class Job51 {
                     input.press("Enter");
                 }
                 log.info("[51job] 通过页码输入跳到第{}页", target);
-                return waitAfterPageChange();
+                return waitAfterPageChange(beforeIds);
             }
         } catch (Exception e) {
             log.debug("[51job] 页码跳转失败: {}", e.getMessage());
@@ -1086,7 +1096,7 @@ public class Job51 {
                 """);
             if (Boolean.TRUE.equals(clicked)) {
                 log.info("[51job] JS 兜底已点击下一页");
-                return waitAfterPageChange();
+                return waitAfterPageChange(beforeIds);
             }
         } catch (Exception ignored) {}
 
@@ -1094,7 +1104,25 @@ public class Job51 {
         return false;
     }
 
-    private boolean waitAfterPageChange() {
+    private void clearPageJobCache() {
+        synchronized (currentPageJobIds) {
+            currentPageJobIds.clear();
+        }
+        synchronized (currentPageCompanyByJobId) {
+            currentPageCompanyByJobId.clear();
+        }
+    }
+
+    private List<Long> snapshotCurrentPageJobIds() {
+        synchronized (currentPageJobIds) {
+            if (!currentPageJobIds.isEmpty()) {
+                return new ArrayList<>(currentPageJobIds);
+            }
+        }
+        return collectJobIdsOnPage();
+    }
+
+    private boolean waitAfterPageChange(List<Long> beforeIds) {
         PlaywrightUtil.sleep(2);
         CompletableFuture<Integer> apiFuture = searchApiFuture;
         if (apiFuture != null) {
@@ -1113,15 +1141,41 @@ public class Job51 {
                 }
                 PlaywrightUtil.sleepMillis(200);
             }
+            if (!apiFuture.isDone()) {
+                log.warn("[51job] 翻页后等待搜索接口超时");
+            }
         }
+        // 注意：不要用 div.ick —— 勾选框常隐藏，waitForSelector(visible) 会误超时
         try {
-            page.waitForSelector("div.ick, [class*='jname'], a[href*='jobdetail']",
-                    new Page.WaitForSelectorOptions().setTimeout(8000));
-            return true;
+            page.waitForSelector(
+                    "[class*='jname'], a[href*='jobdetail'], a[href*='jobs.51job.com/']",
+                    new Page.WaitForSelectorOptions()
+                            .setState(WaitForSelectorState.VISIBLE)
+                            .setTimeout(8000)
+            );
         } catch (Exception e) {
             log.warn("[51job] 翻页后岗位列表未就绪: {}", e.getMessage());
-            return findJobCheckboxes().count() > 0;
+            if (findJobCheckboxes().count() == 0) {
+                return false;
+            }
         }
+
+        List<Long> afterIds = snapshotCurrentPageJobIds();
+        if (afterIds == null || afterIds.isEmpty()) {
+            log.warn("[51job] 翻页后未拿到岗位 ID，结束翻页");
+            return false;
+        }
+        if (beforeIds != null && !beforeIds.isEmpty() && beforeIds.equals(afterIds)) {
+            log.warn("[51job] 翻页后岗位 ID 未变化（仍为旧列表），结束翻页以免空转");
+            return false;
+        }
+        // 确保缓存与当前页一致（API 未回填时用 DOM）
+        synchronized (currentPageJobIds) {
+            if (currentPageJobIds.isEmpty()) {
+                currentPageJobIds.addAll(afterIds);
+            }
+        }
+        return true;
     }
 
     /**
